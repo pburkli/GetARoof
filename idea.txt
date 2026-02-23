@@ -1,0 +1,15 @@
+GetARoof facilitates the process of finding a matching accommodation for vacations.
+  The user may enter his/her goal like "Find a flat for our skiing holidays in
+  Zermatt for 1.1.2027 to 8.1.2027. We are 10 people: The grand parents, they need a
+  room for themselfs, then the Bürkli family, the need a room with four beds or two
+  rooms with two beds, then there is the Windgate familiy, they need a room with
+  three beds. A there is a single person wich needs a room for himself. The flat
+  should not be more than 10min walk from the cablecar. We cannot pay more than
+  3000CHF for the week". The app will then fetch data from many platforms at once
+  like booking.com, homeToGo and more. With the aid of AI the app will check
+  avaliabity for the requested period and it checks if the accodation matches the
+  requirements. It will present the 5 best results to the user with pictures,
+  description and exact location. The user will then make his/her choice and click on
+  a "book now" button on the selected result. The app will then autonmously perform
+  the booking process up until the payment. The user will then be prompted to
+  complete the payment.

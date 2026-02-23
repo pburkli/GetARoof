@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo No commits yet:*)",
+      "Bash(cd:*)",
+      "mcp__plugin_linear_linear__list_teams",
+      "mcp__plugin_linear_linear__create_issue",
+      "mcp__plugin_linear_linear__create_document",
+      "mcp__plugin_linear_linear__list_projects",
+      "Bash(head:*)",
+      "Bash(gh api:*)",
+      "Bash(node:*)",
+      "Bash(cp:*)"
+    ]
+  },
+  "prefersReducedMotion": false
+}
