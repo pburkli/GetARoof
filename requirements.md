@@ -72,7 +72,11 @@ No prior version of GetARoof exists. This is a greenfield project built by a sol
 
 - The system shall provide user registration and login with secure authentication (email/password minimum; extensible to OAuth providers).
 - The system shall accept a free-text natural language input field where users describe their accommodation requirements including but not limited to: destination, date range, number and configuration of guests/rooms, location constraints, and budget.
-- The system shall parse the natural language input using an AI model and extract structured requirements (destination, check-in/check-out dates, room configurations, budget, proximity constraints, etc.).
+- The system shall hand the user's raw input to an **AI intake agent** that owns the entire pre-search conversation: parsing, completeness assessment, refinement, and the decision to proceed.
+- The AI intake agent shall parse the input and check whether the three minimum fields needed to produce a usefully scoped search are present: **destination/location**, **time range**, and **number of guests**. If any are missing or too ambiguous, the agent shall ask the user for them conversationally before continuing.
+- Beyond minimum completeness, the AI intake agent shall assess whether the stated criteria are specific enough to avoid an unmanageably broad result set. If the agent judges the query to be too vague, it shall politely ask one or more targeted refinement questions to narrow the search — for example: *"Would you like breakfast included?"*, *"Do you need a parking space?"*, *"Is a pool important to you?"*, *"Are pets coming along?"*. The agent selects relevant questions based on context; it does not ask a fixed script.
+- The AI intake agent decides — using its own judgment — when the accumulated requirements are specific enough to yield a well-focused search. Only then does it proceed; it does not rely on hard-coded rules or field-count thresholds.
+- Once the AI intake agent is satisfied, it presents the user with a structured confirmation card summarising all extracted requirements (destination, dates, group composition, budget, room configuration, selected preferences). The search is initiated only after the user explicitly confirms this summary.
 - The system shall search booking.com, homeToGo, and Interhome simultaneously for properties matching the parsed requirements.
 - The system shall use affiliate APIs as the primary integration method for each platform, falling back to browser automation where the API does not support the required functionality.
 - The system shall use AI to evaluate each candidate property for availability within the requested dates and conformance to all stated requirements (room count, bed configuration, location proximity, price).
@@ -107,11 +111,15 @@ No prior version of GetARoof exists. This is a greenfield project built by a sol
 **Search Flow**
 1. User logs in and lands on the home screen.
 2. User types a natural language description of their holiday requirements into a single prominent input field and submits.
-3. The app confirms it understood the requirements (displays a structured summary: destination, dates, group composition, budget) and begins searching.
-4. A progress indicator shows that multiple platforms are being searched simultaneously.
-5. The top 5 results are displayed as cards: photo gallery, property name, platform source, total price, distance to key location, brief AI-generated match summary.
-6. User browses results and selects one.
-7. A detail view shows full description, all photos, map, room breakdown, and a "Book Now" button.
+3. The AI intake agent processes the input and responds conversationally in the same interface:
+   - If minimum information (destination, dates, number of guests) is incomplete, the agent asks for what is missing.
+   - If the criteria are present but too broad for a focused search, the agent politely explains this and asks targeted follow-up questions to narrow the requirements (e.g., parking, breakfast, pool, pets). The agent chooses which questions to ask based on context.
+   - The user answers in free text; the agent continues refining until it judges the requirements specific enough.
+4. Once the AI intake agent is satisfied, it presents a structured confirmation card summarising the full set of requirements. The user reviews and clicks "Search" to confirm.
+5. A progress indicator shows that multiple platforms are being searched simultaneously.
+6. The top 5 results are displayed as cards: photo gallery, property name, platform source, total price, distance to key location, brief AI-generated match summary.
+7. User browses results and selects one.
+8. A detail view shows full description, all photos, map, room breakdown, and a "Book Now" button.
 
 **Booking Flow**
 1. User clicks "Book Now."
@@ -188,7 +196,7 @@ To be defined. Reference aesthetic: clean, travel-focused, minimal friction. Ins
 ### Risks
 - **Affiliate API restrictions**: booking.com and others have strict terms of use for their affiliate programs. Automated booking via affiliate API may be restricted or require partner approval. Browser automation may violate terms of service for some platforms.
 - **Browser automation fragility**: Automated form-filling is sensitive to platform UI changes. Platforms may also deploy bot detection that blocks automation.
-- **AI parsing accuracy**: Complex natural language queries (especially group room configurations) may be misinterpreted, leading to incorrect search parameters. A confirmation step mitigates this but does not eliminate it.
+- **AI parsing accuracy**: Complex natural language queries (especially group room configurations) may be misinterpreted, leading to incorrect search parameters or a search scope that is too broad. This is mitigated by the AI intake agent (see Section 5 and the Search Flow in Section 7), which conversationally fills gaps, asks refinement questions when criteria are too vague, and presents a structured confirmation card that the user must approve before any search begins. The user always has the opportunity to correct misinterpretations before they affect results. Residual risk: the AI may misjudge when criteria are "specific enough", either searching too early on broad criteria or asking unnecessarily many questions. Prompt engineering and user testing during development will be used to calibrate this judgment.
 - **Search latency**: Searching 3+ platforms in parallel with AI evaluation of results may exceed acceptable response times. Streaming/progressive results display may be needed.
 - **Platform availability**: External APIs and scraped sites may change or become unavailable without notice, requiring ongoing maintenance.
 - **Regulatory**: GDPR compliance is required for European users. User data handling, consent, and the right to deletion must be designed in from the start.
