@@ -12,7 +12,9 @@
       "Bash(node:*)",
       "Bash(cp:*)",
       "Bash(gh repo:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "WebFetch(domain:developers.amadeus.com)"
     ]
   },
   "prefersReducedMotion": false
