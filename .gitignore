@@ -1,3 +1,4 @@
 .env
 *key*
 *secret*
+.playwright-cli/
