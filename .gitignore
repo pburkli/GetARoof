@@ -3,6 +3,8 @@
 *secret*
 .playwright-cli/
 C\:\\Users\\
+.claude/personal.md
+.claude/settings.local.json
 platforms/package-lock.json
 
 # .NET
