@@ -3,3 +3,11 @@
 *secret*
 .playwright-cli/
 C\:\\Users\\
+platforms/package-lock.json
+
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.DotSettings.user
