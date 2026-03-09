@@ -172,8 +172,21 @@ POST /api/v1/issuing/cardholders/create
 ```json
 {
   "type": "INDIVIDUAL",
-  "first_name": "GetARoof",
-  "last_name": "Platform",
+  "individual": {
+    "name": {
+      "first_name": "GetARoof",
+      "last_name": "Platform"
+    },
+    "date_of_birth": "1990-01-01",
+    "express_consent_obtained": "yes",
+    "address": {
+      "line1": "1 Test Street",
+      "city": "Sydney",
+      "state": "NSW",
+      "postcode": "2000",
+      "country": "AU"
+    }
+  },
   "email": "payments@getaroof.com",
   "request_id": "cardholder-setup-001"
 }
@@ -197,12 +210,12 @@ POST /api/v1/issuing/cards/create
 {
   "program": {
     "purpose": "COMMERCIAL",
-    "type": "CREDIT",
-    "sub_type": "GOOD_FUNDS_CREDIT"
+    "type": "DEBIT"
   },
   "form_factor": "VIRTUAL",
   "is_personalized": false,
   "cardholder_id": "52646a67-878f-46d6-b4b1-02601cd4c553",
+  "created_by": "GetARoof Platform",
   "authorization_controls": {
     "allowed_transaction_count": "SINGLE",
     "allowed_merchant_categories": ["7011"],
@@ -216,7 +229,6 @@ POST /api/v1/issuing/cards/create
       ]
     }
   },
-  "created_by": "GetARoof Platform",
   "request_id": "vcc-booking-12345-001"
 }
 ```
@@ -363,4 +375,25 @@ Always include a unique `request_id` on write operations — Airwallex uses it f
 - **MCC restriction:** Setting `allowed_merchant_categories: ["7011"]` prevents the VCC from being used anywhere except hotels — recommended for security.
 - **Single-use:** Once the hotel charges the VCC, it is automatically terminated.
 - **PCI scope:** Retrieving raw card details via `/details` means your server is technically in PCI scope for that moment. Consider routing through PCI Proxy to remain fully out of scope.
+- **PCI access must be enabled:** The `/details` endpoint requires explicit PCI access activation by your Airwallex Account Manager — request this during onboarding.
 - **Onboarding:** KYB (Know Your Business) verification required before going live — typically 1–2 weeks.
+- **Production requires a business entity:** Individual developers cannot activate a production Airwallex account. You must have a registered company (sole proprietorship may not suffice — verify with Airwallex). The sandbox works fine for individual developers, but production onboarding requires KYB with a legal business entity.
+
+## Account Manager Configuration (Required Before Use)
+
+Contact your Airwallex Account Manager to enable the following — none of these are self-serve:
+
+| Setting | Notes |
+|---------|-------|
+| Issuing APIs | Must be explicitly enabled for your account |
+| Program types | Specify which you need: `PREPAID`, `DEBIT`, `CREDIT`, or `DEFERRED_DEBIT`. Only enabled types work — others return 422. |
+| PCI access | Required to call `GET /issuing/cards/{id}/details` for raw card numbers |
+| Automatic Conversions | Needed if billing currency differs from wallet currency |
+| Card creation limits | Default limits may be low — request higher limits for production |
+| Spending transaction limits by currency | Configure per-card spend caps |
+
+## Sandbox Gotchas
+
+- **Individual cardholder `PENDING` status:** Individual cardholders may require manual approval in sandbox and stay `PENDING` until an Airwallex operator approves them. If stuck, use `COMPANY` type or contact support.
+- **Program type:** In sandbox, test which `program.type` values are enabled for your account — only account-configured types will succeed.
+- **Simulating transactions:** Airwallex sandbox supports simulated card charges to test webhook events (`issuing.transaction.created`, etc.).
