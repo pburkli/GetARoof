@@ -74,15 +74,15 @@ API access was evaluated for multiple platforms. See `platforms/overview.md` for
 
 - The system shall accept a free-text natural language input field where users describe their accommodation requirements including but not limited to: destination, date range, number and configuration of guests/rooms, location constraints, and budget.
 - The system shall hand the user's raw input to an **AI intake agent** that owns the entire pre-search conversation: parsing, completeness assessment, refinement, and the decision to proceed.
-- The AI intake agent shall parse the input and check whether the three minimum fields needed to produce a usefully scoped search are present: **destination/location**, **time range**, and **number of guests**. If any are missing or too ambiguous, the agent shall ask the user for them conversationally before continuing.
+- The AI intake agent shall parse the input and check whether the minimum fields needed to produce a usefully scoped search are present: **destination/location**, **time range**, and **room configuration** (at least one room with number of adults and optional children ages — see Section 11.1). If any are missing or too ambiguous, the agent shall ask the user for them conversationally before continuing.
 - Beyond minimum completeness, the AI intake agent shall assess whether the stated criteria are specific enough to avoid an unmanageably broad result set. If the agent judges the query to be too vague, it shall politely ask one or more targeted refinement questions to narrow the search — for example: *"Would you like breakfast included?"*, *"Do you need a parking space?"*, *"Is a pool important to you?"*, *"Are pets coming along?"*. The agent selects relevant questions based on context; it does not ask a fixed script.
-- The AI intake agent decides — using its own judgment — when the accumulated requirements are specific enough to yield a well-focused search. Only then does it proceed; it does not rely on hard-coded rules or field-count thresholds.
+- The AI intake agent decides — using its own judgment — when the accumulated requirements are specific enough to yield a well-focused search. Only then does it proceed; it does not rely on hard-coded rules or field-count thresholds. The agent operates within a maximum turn limit to avoid over-questioning (see Section 11.2).
 - Once the AI intake agent is satisfied, it presents the user with a structured confirmation card summarising all extracted requirements (destination, dates, group composition, budget, room configuration, selected preferences). The search is initiated only after the user explicitly confirms this summary.
 - The system shall search Hotelbeds for available properties matching the parsed requirements (availability search + content API for photos and descriptions).
 - The system shall use AI to evaluate each candidate property for availability within the requested dates and conformance to all stated requirements (room count, bed configuration, location proximity, price).
 - The system shall rank results and present the best-matching properties to the user, each including: photos, property description, exact map location, total price for the stay, and the source platform.
 - The system shall verify availability of the user's selected accommodation (CheckRate if required by the platform).
-- The system shall provide a clear path to booking the selected accommodation externally (e.g., link to the hotel's website, Booking.com, or Expedia).
+- The system shall provide a clear path to booking the selected accommodation externally via a Google Hotels deep link (see Section 11.4).
 - The system shall implement a platform adapter interface that allows new accommodation platforms to be integrated with minimal changes to core application logic.
 
 ### Phase 2 (Multi-Platform — Add Amadeus)
@@ -109,7 +109,7 @@ API access was evaluated for multiple platforms. See `platforms/overview.md` for
 - **Scalability**: The system shall be deployable to any major cloud provider or self-hosted environment without code changes. It shall support horizontal scaling of the backend.
 - **Security**: All communication shall be over HTTPS. API keys shall be stored securely and never exposed to the client. *[Future: User passwords shall be stored as salted hashes. Authentication tokens shall be short-lived with refresh token rotation.]*
 - **Accessibility**: The web application shall conform to WCAG 2.1 Level AA.
-- **Reliability**: The system shall handle individual platform failures gracefully — if one platform's search fails, results from the remaining platforms shall still be returned with a user-facing notice.
+- **Reliability**: The system shall handle platform timeouts and errors gracefully with user-facing error messages. In Phase 2+, if one platform's search fails, results from remaining platforms shall still be returned with a notice.
 - **Maintainability**: Platform integrations shall be isolated behind adapter interfaces so that changes to one platform do not affect others. AI provider calls shall be abstracted so the underlying model can be swapped without changes to business logic.
 - **Extensibility**: Adding a new platform integration shall require only implementing the platform adapter interface and registering the new adapter — no changes to core search orchestration logic.
 
@@ -186,7 +186,7 @@ To be defined. Reference aesthetic: clean, travel-focused, minimal friction. Ins
 | Frontend | Blazor WebAssembly |
 | Backend | ASP.NET Core Web API |
 | AI Orchestration | Microsoft Semantic Kernel |
-| Database | PostgreSQL (production); SQLite acceptable for local development |
+| Database | PostgreSQL (production); SQLite acceptable for local development (Phase 2+; no persistence in Phase 1) |
 | Containerization | Docker + Docker Compose |
 | Hosting | Cloud-agnostic; any container-capable host |
 
@@ -207,8 +207,8 @@ See `ROADMAP.md` for the full phased roadmap. Summary:
 ## 10. Open Questions / Risks
 
 ### Open Questions
-- What should happen if fewer than 5 results meet the requirements — show fewer results, or relax constraints and flag relaxed ones?
-- What is the best external booking link to show for each Hotelbeds result — direct hotel website, Booking.com, or Google Hotels?
+- ~~What should happen if fewer than 5 results meet the requirements~~ — **Decided**: show fewer results. Do not silently relax constraints. See Section 11.3.
+- ~~What is the best external booking link to show for each Hotelbeds result~~ — **Decided**: Google Hotels deep link. See Section 11.4.
 - Should the MVP include any form of user accounts, or is anonymous search sufficient for Phase 1?
 
 ### Risks
@@ -218,3 +218,228 @@ See `ROADMAP.md` for the full phased roadmap. Summary:
 - **Platform availability**: External APIs may change or become unavailable without notice, requiring ongoing maintenance.
 - **Commercial agreements**: Moving beyond evaluation/test environments for Hotelbeds and other platforms requires negotiating commercial agreements. Requirements and feasibility for an individual developer are unclear.
 - **Regulatory**: GDPR compliance is required for European users. User data handling, consent, and the right to deletion must be designed in from the start.
+
+---
+
+## 11. Design Decisions
+
+This section records key design decisions made before architecture. These bridge the gap between requirements (what to build) and architecture (how to build it).
+
+### 11.1 Domain Models
+
+Two core models flow through the system: `SearchRequest` (input to the search layer) and `HotelResult` (output to the UI).
+
+#### SearchRequest
+
+Produced by the AI intake agent, consumed by platform adapters.
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| Destination | string | Yes | City name or area description ("Zürich", "Lake Lucerne area") |
+| CheckIn | date | Yes | |
+| CheckOut | date | Yes | |
+| Rooms | Room[] | Yes | At least one room with ≥1 adult |
+| TotalBudget | decimal? | No | Max total stay price in user's currency |
+| NightlyBudget | decimal? | No | Max per-night price |
+| Currency | string | No | Defaults to EUR |
+| Preferences | string[] | No | Free-text preferences: "breakfast included", "parking", "pool", "pet-friendly" |
+| LocationConstraint | string? | No | Free-text: "near the lake", "walking distance to old town" |
+
+**Room:**
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| Adults | int | Yes | ≥1 |
+| ChildrenAges | int[] | No | Empty if no children |
+| Label | string? | No | Display label: "grandparents", "family with kids" |
+
+**Key decisions:**
+- Rooms are an explicit array, not a flat guest count — because group trips need specific per-room configurations. This maps directly to how Hotelbeds availability search works.
+- Both budget types are nullable. The AI extracts whichever the user stated.
+- Preferences are free-text strings, not an enum. Different platforms have different facility taxonomies; mapping happens in the ranking/matching layer, not the model.
+- LocationConstraint is free text. Geocoding or semantic interpretation happens downstream.
+
+#### HotelResult
+
+Produced by platform adapters + ranking layer, consumed by the frontend.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| Id | string | Platform-specific hotel ID |
+| Platform | string | "Hotelbeds", "Amadeus" |
+| Name | string | |
+| Description | string | |
+| StarRating | decimal? | 1–5 |
+| Location | Location | Address, city, country, lat/lng |
+| Images | Image[] | URL + optional caption |
+| Facilities | string[] | "Free WiFi", "Pool", "Parking" |
+| Offers | Offer[] | One or more room/rate combinations |
+| MatchScore | int? | 0–100, set by ranking step |
+| MatchExplanation | string? | AI-generated match summary |
+| BookingUrl | string? | External booking link, constructed by the application |
+
+**Offer:**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| OfferId | string | Platform-specific, needed for CheckRate |
+| Rooms | OfferRoom[] | Room details for this combination |
+| TotalPrice | decimal | |
+| Currency | string | |
+| CancellationPolicy | string? | |
+| IsPriceVerified | bool | True after CheckRate |
+
+**OfferRoom:**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| RoomName | string | "Double Standard", "Family Suite" |
+| BoardType | string? | "Breakfast included", "Room only" |
+| Adults | int | |
+| Children | int | |
+| BedDescription | string? | |
+
+**Key decisions:**
+- Offers are nested under Hotel, and Rooms are nested under Offer — because different offers for the same hotel have different room configurations and prices.
+- MatchScore and MatchExplanation are set by the ranking step, not by the platform adapter. Adapters return raw data; the AI evaluator adds scoring.
+- BookingUrl is constructed by the application (see Section 11.4), not returned by the platform API.
+
+**What is intentionally NOT modeled in Phase 1:** User, Account, Booking, Payment, SearchSession (all ephemeral or out of scope).
+
+---
+
+### 11.2 AI Intake Agent Contract
+
+The AI intake agent owns the pre-search conversation. Its only structured output is a `SearchRequest` JSON, produced when it decides to show the confirmation card.
+
+#### Output schema
+
+The agent produces a JSON object matching the `SearchRequest` model (Section 11.1). Example:
+
+```json
+{
+  "destination": "Zürich",
+  "checkIn": "2026-07-15",
+  "checkOut": "2026-07-20",
+  "rooms": [
+    { "adults": 2, "childrenAges": [], "label": "grandparents" },
+    { "adults": 2, "childrenAges": [8, 5], "label": "family with kids" }
+  ],
+  "totalBudget": 2000,
+  "nightlyBudget": null,
+  "currency": "CHF",
+  "preferences": ["breakfast included", "parking", "pool"],
+  "locationConstraint": "near the lake"
+}
+```
+
+#### Minimum required fields
+
+The agent must not proceed without: `destination`, `checkIn`, `checkOut`, and at least one `room` with `adults ≥ 1`. If any of these are missing from the user's input, the agent must ask for them. It must never invent these values.
+
+#### Refinement behaviour
+
+- The agent may ask follow-up questions to narrow preferences, budget, or location — but only when it judges this will meaningfully improve search results.
+- Maximum **3 follow-up turns** before the agent must present the confirmation card with whatever information it has gathered. This prevents the conversation from feeling like an interrogation.
+- The agent may combine multiple questions in one turn.
+
+#### Conversation state
+
+No rigid state machine. The agent manages the conversation naturally. There is no intermediate structured format tracking "filled" vs "missing" fields. The only structured output is the final `SearchRequest` JSON.
+
+#### Validation
+
+The backend validates the `SearchRequest` after receiving it from the AI:
+- Required fields present, correct types (valid date range, adults ≥ 1 per room).
+- If validation fails: reject with error. This indicates a code/prompt bug, not a user error.
+- No re-validation of the AI's judgment (e.g., whether preferences are "specific enough") — the user confirmed the summary card.
+
+#### Error handling
+
+If the AI returns malformed JSON: retry once with a corrective prompt. If it fails again, show a generic user-facing error. This is an edge case, not a design pillar.
+
+---
+
+### 11.3 Ranking Strategy
+
+**Approach: filter in code, rank with LLM.**
+
+#### Step 1 — Platform search (platform adapter)
+
+The adapter translates `SearchRequest` into platform-specific API calls. The platform already filters by destination, dates, and room occupancy — only actually available hotels are returned.
+
+#### Step 2 — Hard constraint filtering (code)
+
+Simple pass/fail checks, no AI involved:
+- **Budget**: drop offers where `totalPrice > totalBudget` or `totalPrice / nights > nightlyBudget`.
+- **Star rating**: if the user specified a minimum, filter here.
+
+Keep this list deliberately short. The more you filter in code, the more you must map free-text preferences to structured fields — which is fragile and platform-specific.
+
+#### Step 3 — AI ranking (LLM)
+
+Send remaining candidates (capped at ~20) to the LLM along with the original `SearchRequest`. The LLM:
+1. Scores each hotel 0–100 for overall fit.
+2. Writes a one-sentence match explanation.
+3. Returns the top results ordered by score.
+
+The prompt includes: hotel name, facilities, room/board descriptions, price, location. It does **not** include images (the LLM cannot evaluate those).
+
+**Why not pure rules-based ranking?** User preferences are free-text and varied. Mapping "quiet area away from nightlife" to structured filters is a never-ending enum game. The LLM handles this naturally.
+
+**Why not pure LLM for everything?** Cost and latency. Letting the platform API and code filters narrow the set to ~20 keeps the LLM call fast and cheap.
+
+#### LLM ranking output
+
+```json
+[
+  {
+    "hotelId": "HB-12345",
+    "score": 92,
+    "explanation": "Excellent fit: 2 rooms match your group exactly, breakfast included, 400m from the lake, well within budget at CHF 1'650 total."
+  }
+]
+```
+
+The backend maps scores and explanations onto `HotelResult.MatchScore` and `HotelResult.MatchExplanation`.
+
+#### Edge cases
+
+- **0 results after filtering**: tell the user no exact matches were found, suggest relaxing budget or dates. Do not silently relax constraints.
+- **Fewer than 5 results**: show what you have. Do not pad with poor matches.
+- **LLM timeout or error**: fall back to price-sorting. Results are still valid, just unranked.
+
+---
+
+### 11.4 External Booking Link Strategy
+
+**Approach: Google Hotels deep link.**
+
+#### Why Google Hotels
+
+- Works for any hotel with no affiliate agreement.
+- Pre-fills hotel name and dates in the URL.
+- Shows prices across multiple booking platforms (Booking.com, Expedia, hotel direct) — the user picks their preferred channel.
+- Zero integration effort.
+
+#### URL construction
+
+```
+https://www.google.com/travel/hotels?q={hotel_name}+{city}&dates={checkIn},{checkOut}&guests={totalGuests}
+```
+
+Constructed entirely from data already present in `HotelResult` and `SearchRequest`.
+
+#### UI treatment
+
+A single button on the hotel detail view: **"Book on Google Hotels →"**, opens in a new tab.
+
+#### Future evolution
+
+The `BookingUrl` field on `HotelResult` is a plain string. Changing the link generation strategy is a one-line change:
+- **Booking.com affiliate** approval (pending) → swap to Booking.com deep link with affiliate tag.
+- **Hotelbeds commercial agreement** → replace external link with in-app booking via their API.
+
+#### Risk
+
+Google Hotels URL format is not a documented stable API. The worst case is the user lands on a Google Hotels page that doesn't perfectly pre-fill. They can still search manually. Acceptable for MVP.
