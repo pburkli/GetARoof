@@ -73,16 +73,16 @@ API access was evaluated for multiple platforms. See `platforms/overview.md` for
 
 - The system shall accept a free-text natural language input field where users describe their accommodation requirements including but not limited to: destination, date range, number and configuration of guests/rooms, location constraints, and budget.
 - The system shall hand the user's raw input to an **AI intake agent** that owns the entire pre-search conversation: parsing, completeness assessment, refinement, and the decision to proceed.
-- The AI intake agent shall parse the input and check whether the minimum fields needed to produce a usefully scoped search are present: **destination/location**, **time range**, and **room configuration** (at least one room with number of adults and optional children ages — see `ARCHITECTURE.md` Section 2). If any are missing or too ambiguous, the agent shall ask the user for them conversationally before continuing.
+- The AI intake agent shall parse the input and check whether the minimum fields needed to produce a usefully scoped search are present: **destination/location**, **time range**, and **room configuration** (at least one room with number of adults and optional children ages — see `ARCHITECTURE.md` Section 4.1). If any are missing or too ambiguous, the agent shall ask the user for them conversationally before continuing.
 - Beyond minimum completeness, the AI intake agent shall assess whether the stated criteria are specific enough to avoid an unmanageably broad result set. If the agent judges the query to be too vague, it shall politely ask one or more targeted refinement questions to narrow the search — for example: *"Would you like breakfast included?"*, *"Do you need a parking space?"*, *"Is a pool important to you?"*, *"Are pets coming along?"*. The agent selects relevant questions based on context; it does not ask a fixed script.
-- The AI intake agent decides — using its own judgment — when the accumulated requirements are specific enough to yield a well-focused search. Only then does it proceed; it does not rely on hard-coded rules or field-count thresholds. The agent operates within a maximum turn limit to avoid over-questioning (see `ARCHITECTURE.md` Section 3).
+- The AI intake agent decides — using its own judgment — when the accumulated requirements are specific enough to yield a well-focused search. Only then does it proceed; it does not rely on hard-coded rules or field-count thresholds. The agent operates within a maximum turn limit to avoid over-questioning (see `ARCHITECTURE.md` Section 4.2).
 - Once the AI intake agent is satisfied, it presents the user with a structured confirmation card summarising all extracted requirements (destination, dates, group composition, budget, room configuration, selected preferences). The search is initiated only after the user explicitly confirms this summary.
 - The system shall search Hotelbeds for available properties matching the parsed requirements (availability search + content API for photos and descriptions).
-- When a location constraint is present, the system shall enrich each candidate property with nearby points of interest (POI) and their distances, using the hotel's coordinates and a POI service (see `ARCHITECTURE.md` Section 4).
+- When a location constraint is present, the system shall enrich each candidate property with nearby points of interest (POI) and their distances, using the hotel's coordinates and a POI service (see `ARCHITECTURE.md` Section 4.3).
 - The system shall use AI to evaluate each candidate property for conformance to all stated requirements (room configuration, bed types, location proximity, preferences, price), using concrete POI distance data where available.
-- The system shall rank results and present the best-matching properties to the user, each including: photos, property description, exact map location, total price for the stay, and the source platform. If fewer results match than expected, show what is available — do not silently relax constraints or pad with poor matches (see `ARCHITECTURE.md` Section 4).
+- The system shall rank results and present the best-matching properties to the user, each including: photos, property description, exact map location, total price for the stay, and the source platform. If fewer results match than expected, show what is available — do not silently relax constraints or pad with poor matches (see `ARCHITECTURE.md` Section 4.3).
 - The system shall verify availability of the user's selected accommodation (CheckRate if required by the platform).
-- The system shall provide a clear path to booking the selected accommodation externally via a Google Hotels deep link (see `ARCHITECTURE.md` Section 5).
+- The system shall provide a clear path to booking the selected accommodation externally via a Google Hotels deep link (see `ARCHITECTURE.md` Section 4.4).
 - The system shall implement a platform adapter interface that allows new accommodation platforms to be integrated with minimal changes to core application logic.
 - The system shall provide optional user registration and login with secure authentication (email/password minimum; extensible to OAuth providers). Sign-up shall not be required to search.
 - Registered users shall be able to save completed searches (query parameters and results) for later reference.
@@ -166,7 +166,7 @@ To be defined. Reference aesthetic: clean, travel-focused, minimal friction. Ins
 
 ### Tech Stack
 
-See `ARCHITECTURE.md` Section 1 for the full tech stack table.
+See `ARCHITECTURE.md` Section 1.3 for the full tech stack.
 
 ---
 
