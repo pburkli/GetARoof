@@ -209,9 +209,9 @@ Location Resolution is a lightweight service rather than a full component — it
 
 **Location Resolution** (lightweight service)
 - **Owns:** The mapping from free-text destinations to geocoded locations
-- **Does:** Convert destination strings ("Lake Lucerne area", "Zürich") into coordinates and/or platform-specific location codes
-- **Does not:** Decide what destination to search. Query accommodation platforms. Persist any data.
-- **Interfaces:** Accepts destination string, returns structured location data (coordinates, location codes)
+- **Does:** Convert destination strings ("Lake Lucerne area", "Zürich") into geocoded coordinates (lat/lng, bounding box)
+- **Does not:** Decide what destination to search. Query accommodation platforms. Persist any data. Produce platform-specific location codes — that mapping is the responsibility of each platform adapter.
+- **Interfaces:** Accepts destination string, returns structured location data (coordinates, display name)
 
 ### 2.3 Interaction Map
 
@@ -224,7 +224,7 @@ Presentation → Intake Agent
 
 Search Orchestration → Location Resolution
   SearchRequest.Destination (string)
-  ← Resolved location (coordinates, platform-specific codes)
+  ← Resolved location (coordinates, display name)
 
 Search Orchestration → Platform Search  [one call per platform, parallel in Phase 2]
   SearchRequest + resolved location
@@ -460,14 +460,14 @@ The adapter translates `SearchRequest` into platform-specific API calls. The pla
 #### Step 2 — Hard constraint filtering (code)
 
 Simple pass/fail checks, no AI involved:
-- **Budget**: drop offers where `totalPrice > totalBudget` or `totalPrice / nights > nightlyBudget`.
+- **Budget**: drop offers that exceed either budget constraint — where `totalPrice > totalBudget` or `totalPrice / nights > nightlyBudget`. If both are set, an offer must satisfy both.
 - **Star rating**: if the user specified a minimum, filter here.
 
 Keep this list deliberately short. The more you filter in code, the more you must map free-text preferences to structured fields — which is fragile and platform-specific.
 
 #### Step 3 — POI enrichment (conditional)
 
-Runs only when `SearchRequest.LocationConstraint` is present. For each remaining candidate (capped at ~20 after Step 2):
+Runs only when `SearchRequest.LocationConstraint` is present. If more than 20 candidates remain after Step 2, only the top 20 (by price, ascending) proceed to enrichment and ranking. For each remaining candidate:
 
 1. The LLM extracts relevant POI categories from the free-text constraint (e.g., "within walking distance of a grocery store" → `supermarket`; "not further than 100m from a train station" → `train_station`).
 2. Query the POI service (OpenStreetMap Overpass API) with the hotel's lat/lng and a reasonable search radius (default 1km) for each category.
@@ -481,7 +481,7 @@ This step converts vague location constraints into concrete distance data that t
 
 #### Step 4 — AI ranking (LLM)
 
-Send remaining candidates (capped at ~20) to the LLM along with the original `SearchRequest`. The LLM:
+Send remaining candidates (the same ≤20 from Step 3, or all candidates if Step 3 was skipped) to the LLM along with the original `SearchRequest`. The LLM:
 1. Scores each hotel 0–100 for overall fit.
 2. Writes a one-sentence match explanation.
 3. Returns the top results ordered by score.
@@ -531,7 +531,7 @@ The backend maps scores and explanations onto `HotelResult.MatchScore` and `Hote
 https://www.google.com/travel/hotels?q={hotel_name}+{city}&dates={checkIn},{checkOut}&guests={totalGuests}
 ```
 
-Constructed entirely from data already present in `HotelResult` and `SearchRequest`.
+`totalGuests` is the sum of all adults and children across all rooms in the `SearchRequest`. Constructed entirely from data already present in `HotelResult` and `SearchRequest`.
 
 #### UI treatment
 

@@ -78,7 +78,7 @@ API access was evaluated for multiple platforms. See `platforms/overview.md` for
 - The AI intake agent decides — using its own judgment — when the accumulated requirements are specific enough to yield a well-focused search. Only then does it proceed; it does not rely on hard-coded rules or field-count thresholds. The agent operates within a maximum turn limit to avoid over-questioning (see `ARCHITECTURE.md` Section 4.2).
 - Once the AI intake agent is satisfied, it presents the user with a structured confirmation card summarising all extracted requirements (destination, dates, group composition, budget, room configuration, selected preferences). The search is initiated only after the user explicitly confirms this summary.
 - The system shall search Hotelbeds for available properties matching the parsed requirements (availability search + content API for photos and descriptions).
-- When a location constraint is present, the system shall enrich each candidate property with nearby points of interest (POI) and their distances, using the hotel's coordinates and a POI service (see `ARCHITECTURE.md` Section 4.3).
+- When a location constraint is present, the system shall enrich the top candidate properties (after hard-constraint filtering) with nearby points of interest (POI) and their distances, using the hotel's coordinates and a POI service (see `ARCHITECTURE.md` Section 4.3).
 - The system shall use AI to evaluate each candidate property for conformance to all stated requirements (room configuration, bed types, location proximity, preferences, price), using concrete POI distance data where available.
 - The system shall rank results and present the best-matching properties to the user, each including: photos, property description, exact map location, total price for the stay, and the source platform. If fewer results match than expected, show what is available — do not silently relax constraints or pad with poor matches (see `ARCHITECTURE.md` Section 4.3).
 - The system shall verify availability of the user's selected accommodation (CheckRate if required by the platform).
@@ -123,7 +123,8 @@ API access was evaluated for multiple platforms. See `platforms/overview.md` for
 5. A progress indicator shows that the platform is being searched.
 6. The top results are displayed as cards: photo gallery, property name, platform source, total price, distance to key location, brief AI-generated match summary.
 7. User browses results and selects one.
-8. A detail view shows full description, all photos, map, room breakdown, and an external booking link.
+8. The system verifies the selected accommodation's availability and current price with the platform (CheckRate). If the offer is no longer available, the user is notified.
+9. A detail view shows full description, all photos, map, room breakdown, and an external booking link.
 
 **Account Flow (Optional)**
 1. User may sign up with email + password at any point. Sign-up is never required to search.
@@ -166,7 +167,7 @@ To be defined. Reference aesthetic: clean, travel-focused, minimal friction. Ins
 
 ### Tech Stack
 
-See `ARCHITECTURE.md` Section 1.3 for the full tech stack.
+See `ARCHITECTURE.md` Section 1.3 (Constraints) for the full tech stack.
 
 ---
 
