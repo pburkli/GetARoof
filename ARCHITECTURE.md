@@ -144,7 +144,151 @@ A new developer clones the repo and runs `docker compose up` with a single confi
 
 ## 2. Logical Components
 
-*To be defined.*
+This section defines the major functional building blocks of the system, their responsibilities, interactions, and data ownership. These are logical components — they represent responsibilities, not deployment units or code modules.
+
+### 2.1 Component List
+
+The system consists of seven components and one lightweight service:
+
+| Component | Subdomain | Description |
+|---|---|---|
+| Intake Agent | Search (core) | Owns the pre-search conversation with the user |
+| Platform Search | Search (core) | Integrates with accommodation platform APIs via adapters |
+| Result Processing | Search (core) | Filters, enriches, and ranks search results |
+| Search Orchestration | Search (core) | Coordinates the end-to-end search workflow |
+| Presentation | Search (core) | All user-facing UI rendering |
+| Identity & Accounts | User Management (supporting) | User registration, authentication, account lifecycle |
+| Saved Searches | Persistence (supporting) | Stores and retrieves past searches for registered users |
+| Location Resolution | Search (core) — lightweight service | Resolves free-text destinations to geocoded locations |
+
+Location Resolution is a lightweight service rather than a full component — it has no domain model, no state, and no data ownership. It exists as a separate unit because of the interoperability characteristic: it wraps an external geocoding API (Nominatim) behind an interface that can be swapped.
+
+### 2.2 Responsibility Definitions
+
+**Intake Agent**
+- **Owns:** The pre-search conversation — all messages between user and AI before search execution
+- **Does:** Parse natural language input, assess completeness, ask follow-up questions, judge when criteria are specific enough, produce a confirmed `SearchRequest` JSON
+- **Does not:** Execute searches, resolve locations, validate against platform capabilities
+- **Interfaces:** Accepts user messages, returns AI responses or a confirmed `SearchRequest`
+
+**Platform Search**
+- **Owns:** All platform-specific API integration logic — one adapter per platform
+- **Does:** Translate `SearchRequest` + resolved location into platform-specific API calls. Call availability and content APIs. Map platform-specific responses into the common `HotelResult` model. Execute CheckRate verification for a selected offer.
+- **Does not:** Filter, rank, or score results. Handle POI enrichment. Decide which platforms to query.
+- **Interfaces:** Accepts `SearchRequest` + resolved location, returns `HotelResult[]`. Accepts offer ID for CheckRate, returns verified availability.
+
+**Result Processing**
+- **Owns:** The pipeline that transforms raw platform results into ranked, enriched results
+- **Does:** Apply hard-constraint filters (budget, star rating). Query POI service for nearby points of interest when a location constraint is present. Send candidates to AI for scoring and match explanation generation. Return ranked results with scores and explanations.
+- **Does not:** Call accommodation platform APIs. Own the conversation with the user. Decide when to trigger the pipeline.
+- **Interfaces:** Accepts `SearchRequest` + `HotelResult[]`, returns ranked and enriched `HotelResult[]`
+
+**Search Orchestration**
+- **Owns:** The end-to-end search workflow and coordination between components
+- **Does:** Receive confirmed `SearchRequest` from Intake Agent. Call Location Resolution. Dispatch to Platform Search (parallel in Phase 2). Pass results through Result Processing. Handle component failures — decide whether to return partial results or error messages. Construct external booking link.
+- **Does not:** Parse natural language. Call platform APIs directly. Score or rank results. Manage user accounts.
+- **Interfaces:** Accepts confirmed `SearchRequest`, returns ranked `HotelResult[]`. Accepts hotel selection, returns verified availability + booking URL.
+
+**Presentation**
+- **Owns:** All user-facing UI rendering
+- **Does:** Display the chat interface for the Intake Agent conversation. Show progress indicator during search. Render ranked result cards (photos, price, match summary). Display property detail view (full description, photos, room breakdown, map, booking link). Display saved searches for logged-in users.
+- **Does not:** Run business logic. Call external APIs directly. Make ranking or filtering decisions.
+- **Interfaces:** Consumes backend API responses. Emits user actions (submit message, confirm search, select property, save search).
+
+**Identity & Accounts**
+- **Owns:** User credentials, authentication state, and account lifecycle
+- **Does:** Register new users (email/password). Authenticate users and issue tokens. Manage token refresh and session lifecycle. Support account deletion (GDPR).
+- **Does not:** Store search data. Make authorization decisions beyond authenticated/anonymous.
+- **Interfaces:** Registration, login, logout, token refresh, account deletion endpoints
+
+**Saved Searches**
+- **Owns:** The association between users and their past searches
+- **Does:** Persist a completed search (`SearchRequest` + `HotelResult[]` snapshot) linked to a user account. List and retrieve saved searches. Delete saved searches.
+- **Does not:** Execute searches. Manage user accounts or authentication. Re-rank or refresh saved results.
+- **Interfaces:** Save, list, get, delete endpoints (all require authenticated user)
+
+**Location Resolution** (lightweight service)
+- **Owns:** The mapping from free-text destinations to geocoded locations
+- **Does:** Convert destination strings ("Lake Lucerne area", "Zürich") into coordinates and/or platform-specific location codes
+- **Does not:** Decide what destination to search. Query accommodation platforms. Persist any data.
+- **Interfaces:** Accepts destination string, returns structured location data (coordinates, location codes)
+
+### 2.3 Interaction Map
+
+#### Search Flow
+
+```
+Presentation → Intake Agent
+  User message (text)
+  ← AI response (text) or confirmed SearchRequest (JSON)
+
+Search Orchestration → Location Resolution
+  SearchRequest.Destination (string)
+  ← Resolved location (coordinates, platform-specific codes)
+
+Search Orchestration → Platform Search  [one call per platform, parallel in Phase 2]
+  SearchRequest + resolved location
+  ← HotelResult[]
+
+Search Orchestration → Result Processing
+  SearchRequest + HotelResult[] (combined from all platforms)
+  ← Ranked, enriched HotelResult[]
+
+Search Orchestration → Presentation
+  ← Ranked HotelResult[] + progress updates during search
+
+Presentation → Search Orchestration
+  Selected hotel + offer ID (user picks a property)
+  ← Verified availability + booking URL
+
+Search Orchestration → Platform Search
+  CheckRate request (offer ID)
+  ← Verified price/availability
+```
+
+#### Account Flow
+
+```
+Presentation → Identity & Accounts
+  Register / Login / Logout / Delete account
+
+Presentation → Saved Searches
+  Save search / List saved / View saved / Delete saved
+  (all require authenticated user ID from Identity & Accounts)
+```
+
+#### External System Dependencies
+
+```
+Intake Agent        → AI Provider (via Semantic Kernel)
+Result Processing   → AI Provider (via Semantic Kernel)
+Result Processing   → Overpass API (POI queries)
+Platform Search     → Hotelbeds API (Phase 1)
+Platform Search     → Amadeus API (Phase 2)
+Location Resolution → Nominatim (geocoding)
+```
+
+### 2.4 Data Ownership
+
+| Data | Owner | Consumers | Persistence |
+|---|---|---|---|
+| Conversation history (pre-search messages) | Intake Agent | Presentation | Transient (per-session) |
+| `SearchRequest` | Intake Agent (produces) | Search Orchestration, Location Resolution, Platform Search, Result Processing, Saved Searches | Transient in search flow; snapshot in Saved Searches |
+| `HotelResult[]` | Platform Search (produces), Result Processing (enriches) | Search Orchestration, Presentation, Saved Searches | Transient in search flow; snapshot in Saved Searches |
+| User accounts (email, hashed password, metadata) | Identity & Accounts | Saved Searches (user ID reference), Presentation (auth state) | Persistent (database) |
+| Auth tokens | Identity & Accounts | Presentation | Short-lived (token store) |
+| Saved search records | Saved Searches | Presentation | Persistent (database) |
+| API credentials and provider config | Configuration (cross-cutting) | Platform Search, Intake Agent, Result Processing, Location Resolution | Persistent (environment variables / config files) |
+
+### 2.5 Boundary Issues and Risks
+
+| Risk | Severity | Mitigation |
+|---|---|---|
+| `SearchRequest` touched by 6 components | Moderate | Treat as a stable contract. Changes require deliberate cross-component review. |
+| `HotelResult` mutated by 3 components in sequence (Platform Search creates, Result Processing enriches, Search Orchestration adds booking URL) | Low | Pipeline order enforced by Search Orchestration. Do not allow writes outside the pipeline. |
+| Saved Searches stores `SearchRequest` + `HotelResult` snapshots — schema changes could make old data unreadable | Low | Acceptable for MVP. Add schema versioning if models evolve after users have saved searches. |
+| Search Orchestration is a hub (touches 5 other components) | Low | Keep it thin — workflow coordination and error handling only. No domain logic. If business rules creep in, push them to the appropriate component. |
+| Result Processing has two distinct external dependencies (Overpass API, AI Provider) with different failure modes | Low | Already addressed by internal step structure (Section 4.3). Each step handles its own failures independently. |
 
 ---
 
