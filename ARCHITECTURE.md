@@ -1,6 +1,6 @@
 # GetARoof — Architecture
 
-This document defines the architecture for GetARoof. It follows a reasoning-first structure: quality attributes and constraints (Section 1), then logical components and architectural style (Sections 2–3, to be defined), then concrete design decisions (Section 4).
+This document defines the architecture for GetARoof. It follows a reasoning-first structure: quality attributes and constraints (Section 1), logical components (Section 2), architectural style (Section 3), then concrete design decisions (Section 4).
 
 ---
 
@@ -294,7 +294,68 @@ Location Resolution → Nominatim (geocoding)
 
 ## 3. Architectural Style
 
-*To be defined.*
+### 3.1 Chosen Style
+
+**Modular Monolith** — domain-partitioned modules, monolithic deployment.
+
+Each logical component from Section 2 becomes an internal module with explicit boundaries enforced by .NET project references and `internal` access modifiers. The system deploys as a single container.
+
+### 3.2 Rationale
+
+The three critical characteristics (maintainability/extensibility, interoperability, reliability) all require structural isolation of domain components. The modular monolith provides this through module boundaries enforced by the .NET project system, while keeping monolithic deployment simplicity — which matches the solo developer, Docker-based, cloud-agnostic constraints.
+
+- **Maintainability / Extensibility:** Module boundaries enforce the "add adapter = implement interface + register, no other code changes" requirement at compile time. Swapping the AI provider stays contained within modules that use Semantic Kernel.
+- **Interoperability:** Each platform adapter lives in its own module (or sub-module). A breaking change in one platform's API affects only that adapter's code.
+- **Reliability / Resilience:** In-process communication between modules makes error handling simpler and more predictable than distributed alternatives. Parallel adapter calls with independent error handling are straightforward with async/await.
+- **Performance:** No serialization or network overhead between modules. The entire 30-second latency budget goes to external I/O, not internal communication.
+- **Deployability:** Single container, `docker compose up`, no service discovery or message broker infrastructure.
+
+### 3.3 Rejected Alternatives
+
+**Layered Architecture** — Does not structurally enforce domain isolation. Technical layers (Controllers → Services → Repositories) cut across domain boundaries, so adapter isolation relies on developer discipline rather than compiler enforcement. Phase 2 (Amadeus) is already planned, making this a concrete risk — not a hypothetical one. Fastest to start but trades long-term structural clarity for short-term velocity.
+
+**Microkernel (Core + Plugin)** — Solves adapter extensibility well, but only one of seven components (Platform Search) fits the plugin model. The remaining six components are core, not extensions. In practice the plugin mechanism — interface + DI registration — is identical to what the modular monolith provides through module boundaries. Adds conceptual overhead (core-vs-plugin distinction, plugin infrastructure) without additional structural benefit. .NET also lacks first-class microkernel support, so the plugin infrastructure would need to be built manually.
+
+**Microservices** — No driver for distributed deployment. The system has seven components built by a solo developer targeting 50 concurrent sessions. There is no need for independent deployment, independent scaling, or team autonomy. Operational overhead (service discovery, inter-service communication, distributed tracing, per-service databases) is unjustified. Every quality scenario passes with in-process communication.
+
+**Event-Driven Architecture** — The core workflow is request-response. There are no high-throughput event streams, no fan-out to multiple consumers, and no asynchronous workflows. Adding a message broker would introduce infrastructure complexity without solving a real problem.
+
+**Hybrid (Modular Monolith + Microkernel)** — Considered combining modular monolith for overall structure with microkernel for Platform Search. In practice, this is exactly what a well-designed modular monolith already does: Platform Search defines an `IPlatformAdapter` interface, each platform implements it, DI handles registration. Adding the microkernel label doesn't change the code.
+
+### 3.4 Trade-off Summary
+
+**Gained:**
+- Compiler-enforced module boundaries via .NET project references and `internal` access modifiers
+- Clean adapter extensibility — new platform = new project, implement interface, register
+- Simple deployment — single container, no distributed infrastructure
+- Low operational overhead — one process to monitor, deploy, and debug
+- Atomic cross-module operations — GDPR data deletion in a single database transaction
+- Straightforward parallel orchestration via async/await in a shared process
+
+**Accepted:**
+- More upfront project structure work than layered architecture (hours, not days) to define module projects, configure DI registration per module, and set up project reference direction
+- Risk of modular erosion if module boundaries are not maintained — mitigated by `internal` access modifiers and compile-time project reference enforcement, which is stronger than convention alone
+- Cannot independently deploy or scale individual components — no current or foreseeable requirement justifies this capability
+- If a component ever needed dedicated hardware (e.g., GPU for AI processing), extraction into a separate service would be required — but module boundaries already define the interfaces that would make this extraction straightforward
+
+### 3.5 Scenario Validation
+
+All 12 quality scenarios from Section 1.5 were walked through against the modular monolith. All pass without workarounds or compromises.
+
+| Scenario | Result | Notes |
+|---|---|---|
+| S1 — Add platform adapter | Pass | New project in Platform Search module, implement interface, register. No other modules touched. |
+| S2 — Swap AI provider | Pass | Configuration + connector change within AI-consuming modules. No business logic changes. |
+| S3 — Platform API breaking change | Pass | Only the affected adapter project changes. Common `HotelResult` contract unchanged. |
+| S4 — Platform timeout (Phase 1) | Pass | In-process error handling in Search Orchestration. Clear error to user within 5 seconds. |
+| S5 — One platform fails (Phase 2) | Pass | Parallel adapter calls with independent error handling. Partial results returned. |
+| S6 — AI ranking fails | Pass | Retry + price-sort fallback contained within Result Processing. |
+| S7 — Full pipeline under 30s | Pass | In-process orchestration adds negligible overhead. Latency budget spent on external I/O. |
+| S8 — Intake response under 3s | Pass | Direct call to Intake Agent module. Latency dominated by AI provider. |
+| S9 — API key protection | Pass | Single backend process. Secrets in environment variables, never sent to client. |
+| S10 — GDPR data deletion | Pass | Single database, atomic transaction across Identity & Saved Searches. |
+| S11 — Local dev setup | Pass | Single app container + PostgreSQL. `docker compose up` within 5 minutes. |
+| S12 — 50 concurrent sessions | Pass | Stateless backend, horizontal scaling by adding container instances. |
 
 ---
 
