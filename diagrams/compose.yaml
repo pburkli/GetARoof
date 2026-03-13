@@ -1,0 +1,10 @@
+services:
+  render:
+    image: plantuml/plantuml
+    # On Linux, set PUML_USER in your shell to avoid root-owned output files:
+    #   export PUML_USER="$(id -u):$(id -g)"
+    # On Windows/macOS this is not needed (leave unset).
+    user: ${PUML_USER:-}
+    volumes:
+      - .:/data
+    command: -tsvg /data/*.puml
