@@ -1,0 +1,24 @@
+@startuml context
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+Person(user, "User", "Group organizer or traveler")
+
+System(getaroof, "GetARoof", "AI-driven accommodation search with natural language input, multi-platform results, and external booking links")
+
+System_Ext(hotelbeds, "Hotelbeds API", "Hotel availability + content")
+System_Ext(amadeus, "Amadeus API", "Hotel availability (Phase 2)")
+System_Ext(ai, "AI Provider", "OpenAI / Anthropic via Semantic Kernel")
+System_Ext(nominatim, "Nominatim", "Geocoding")
+System_Ext(overpass, "Overpass API", "POI queries")
+System_Ext(google, "Google Hotels", "External booking")
+
+Rel(user, getaroof, "Searches for accommodation", "HTTPS")
+Rel(user, google, "Books externally", "Browser link")
+Rel(getaroof, hotelbeds, "Availability + content queries", "HTTPS")
+Rel(getaroof, amadeus, "Availability queries", "HTTPS")
+Rel(getaroof, ai, "Intake conversation + ranking", "HTTPS")
+Rel(getaroof, nominatim, "Geocode destinations", "HTTPS")
+Rel(getaroof, overpass, "POI radius queries", "HTTPS")
+Rel(getaroof, google, "Constructs deep link", "URL")
+
+@enduml

@@ -1,0 +1,48 @@
+@startuml component
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+Person(user, "User")
+
+Container_Boundary(frontend, "Blazor WASM (Browser)") {
+    Component(presentation, "Presentation", "Blazor", "Chat UI, search results, property details, saved searches")
+}
+
+Container_Boundary(backend, "ASP.NET Core Backend (Docker)") {
+    Component(intake, "Intake Agent", "Module", "Pre-search conversation, produces SearchRequest")
+    Component(orchestration, "Search Orchestration", "Module", "Coordinates search workflow, handles failures")
+    Component(platformsearch, "Platform Search", "Module", "Platform adapters behind IPlatformAdapter")
+    Component(resultprocessing, "Result Processing", "Module", "Filtering, POI enrichment, LLM ranking")
+    Component(identity, "Identity & Accounts", "Module", "Registration, authentication, GDPR deletion")
+    Component(saved, "Saved Searches", "Module", "Persist and retrieve past searches")
+    Component(location, "Location Resolution", "Service", "Geocode destinations via Nominatim")
+}
+
+ContainerDb(db, "PostgreSQL", "Shared database, per-module table ownership")
+
+System_Ext(hotelbeds, "Hotelbeds API")
+System_Ext(amadeus, "Amadeus API (Phase 2)")
+System_Ext(ai, "AI Provider")
+System_Ext(nominatim, "Nominatim")
+System_Ext(overpass, "Overpass API")
+
+Rel(user, presentation, "Messages, confirmations, selections")
+Rel(presentation, intake, "User messages", "HTTPS")
+Rel(presentation, orchestration, "Confirmed SearchRequest / hotel selection", "HTTPS")
+Rel(presentation, identity, "Register / login / delete", "HTTPS")
+Rel(presentation, saved, "Save / list / view searches", "HTTPS")
+
+Rel(orchestration, location, "Destination string")
+Rel(orchestration, platformsearch, "SearchRequest + location")
+Rel(orchestration, resultprocessing, "SearchRequest + HotelResult[]")
+
+Rel(intake, ai, "Conversation", "HTTPS")
+Rel(resultprocessing, ai, "Ranking prompt", "HTTPS")
+Rel(resultprocessing, overpass, "POI radius queries", "HTTPS")
+Rel(platformsearch, hotelbeds, "Availability + content", "HTTPS")
+Rel(platformsearch, amadeus, "Availability", "HTTPS")
+Rel(location, nominatim, "Geocoding", "HTTPS")
+
+Rel(identity, db, "Users, credentials")
+Rel(saved, db, "Search snapshots")
+
+@enduml

@@ -1,0 +1,84 @@
+@startuml search-flow
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+actor User
+participant "Presentation\n(Blazor)" as UI
+participant "Intake Agent" as Intake
+participant "AI Provider" as AI
+participant "Search\nOrchestration" as Orch
+participant "Location\nResolution" as Loc
+participant "Nominatim" as Nom
+participant "Platform Search" as PS
+participant "Hotelbeds API" as HB
+participant "Result\nProcessing" as RP
+participant "Overpass API" as OV
+participant "AI Provider " as AI2
+
+== Intake Conversation ==
+
+User -> UI: Natural language message
+UI -> Intake: User message
+Intake -> AI: Conversation prompt
+AI --> Intake: Follow-up question
+Intake --> UI: AI response
+UI --> User: Display question
+
+note over User, Intake: Repeats until agent is satisfied\n(max 3 follow-up turns)
+
+User -> UI: Answers
+UI -> Intake: User message
+Intake -> AI: Conversation prompt
+AI --> Intake: SearchRequest JSON
+Intake --> UI: Confirmation card
+UI --> User: Display confirmation card
+
+== Search Execution ==
+
+User -> UI: Confirms search
+UI -> Orch: Confirmed SearchRequest
+
+Orch -> Loc: Destination string
+Loc -> Nom: Geocode request
+Nom --> Loc: Coordinates
+Loc --> Orch: Resolved location
+
+Orch -> PS: SearchRequest + location
+PS -> HB: Availability + content query
+HB --> PS: Raw hotel data
+PS --> Orch: HotelResult[]
+
+Orch -> RP: SearchRequest + HotelResult[]
+
+== Result Processing Pipeline ==
+
+RP -> RP: Step 1: Hard-constraint filtering\n(budget, star rating)
+
+alt LocationConstraint present
+    RP -> AI2: Extract POI categories from constraint
+    AI2 --> RP: Categories
+    loop For each candidate (≤20)
+        RP -> OV: POI radius query\n(hotel coords + category)
+        OV --> RP: Nearby POIs + distances
+    end
+    RP -> RP: Step 2: Populate NearbyPOIs
+end
+
+RP -> AI2: Rank candidates with\nSearchRequest + facilities + POI data
+AI2 --> RP: Scores + explanations
+RP --> Orch: Ranked HotelResult[]
+
+Orch --> UI: Ranked results
+UI --> User: Display result cards
+
+== Availability Verification ==
+
+User -> UI: Selects a property
+UI -> Orch: Hotel + offer ID
+Orch -> PS: CheckRate request
+PS -> HB: CheckRate API call
+HB --> PS: Verified price / availability
+PS --> Orch: Verification result
+Orch --> UI: Verified details + booking URL
+UI --> User: Property detail view\nwith "Book on Google Hotels" button
+
+@enduml

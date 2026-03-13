@@ -783,222 +783,28 @@ Store preferences as `string[]` in `SearchRequest`. No enum mapping at the model
 
 ## 6. Architecture Diagrams
 
-All diagrams use the [C4 model](https://c4model.com/) with PlantUML.
+All diagrams use the [C4 model](https://c4model.com/) with PlantUML. Source files are in `diagrams/*.puml`. Regenerate SVGs with `diagrams/render.sh`.
 
 ### 6.1 Context Diagram
 
 The system, its users, and all external dependencies.
 
-```plantuml
-@startuml Context Diagram
-!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
-
-Person(user, "User", "Group organizer or traveler")
-
-System(getaroof, "GetARoof", "AI-driven accommodation search with natural language input, multi-platform results, and external booking links")
-
-System_Ext(hotelbeds, "Hotelbeds API", "Hotel availability + content")
-System_Ext(amadeus, "Amadeus API", "Hotel availability (Phase 2)")
-System_Ext(ai, "AI Provider", "OpenAI / Anthropic via Semantic Kernel")
-System_Ext(nominatim, "Nominatim", "Geocoding")
-System_Ext(overpass, "Overpass API", "POI queries")
-System_Ext(google, "Google Hotels", "External booking")
-
-Rel(user, getaroof, "Searches for accommodation", "HTTPS")
-Rel(user, google, "Books externally", "Browser link")
-Rel(getaroof, hotelbeds, "Availability + content queries", "HTTPS")
-Rel(getaroof, amadeus, "Availability queries", "HTTPS")
-Rel(getaroof, ai, "Intake conversation + ranking", "HTTPS")
-Rel(getaroof, nominatim, "Geocode destinations", "HTTPS")
-Rel(getaroof, overpass, "POI radius queries", "HTTPS")
-Rel(getaroof, google, "Constructs deep link", "URL")
-
-@enduml
-```
+![Context Diagram](diagrams/context.svg)
 
 ### 6.2 Component Diagram
 
 All modules, their interactions, and external system dependencies.
 
-```plantuml
-@startuml Component Diagram
-!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
-
-Person(user, "User")
-
-Container_Boundary(frontend, "Blazor WASM (Browser)") {
-    Component(presentation, "Presentation", "Blazor", "Chat UI, search results, property details, saved searches")
-}
-
-Container_Boundary(backend, "ASP.NET Core Backend (Docker)") {
-    Component(intake, "Intake Agent", "Module", "Pre-search conversation, produces SearchRequest")
-    Component(orchestration, "Search Orchestration", "Module", "Coordinates search workflow, handles failures")
-    Component(platformsearch, "Platform Search", "Module", "Platform adapters behind IPlatformAdapter")
-    Component(resultprocessing, "Result Processing", "Module", "Filtering, POI enrichment, LLM ranking")
-    Component(identity, "Identity & Accounts", "Module", "Registration, authentication, GDPR deletion")
-    Component(saved, "Saved Searches", "Module", "Persist and retrieve past searches")
-    Component(location, "Location Resolution", "Service", "Geocode destinations via Nominatim")
-}
-
-ContainerDb(db, "PostgreSQL", "Shared database, per-module table ownership")
-
-System_Ext(hotelbeds, "Hotelbeds API")
-System_Ext(amadeus, "Amadeus API (Phase 2)")
-System_Ext(ai, "AI Provider")
-System_Ext(nominatim, "Nominatim")
-System_Ext(overpass, "Overpass API")
-
-Rel(user, presentation, "Messages, confirmations, selections")
-Rel(presentation, intake, "User messages", "HTTPS")
-Rel(presentation, orchestration, "Confirmed SearchRequest / hotel selection", "HTTPS")
-Rel(presentation, identity, "Register / login / delete", "HTTPS")
-Rel(presentation, saved, "Save / list / view searches", "HTTPS")
-
-Rel(orchestration, location, "Destination string")
-Rel(orchestration, platformsearch, "SearchRequest + location")
-Rel(orchestration, resultprocessing, "SearchRequest + HotelResult[]")
-
-Rel(intake, ai, "Conversation", "HTTPS")
-Rel(resultprocessing, ai, "Ranking prompt", "HTTPS")
-Rel(resultprocessing, overpass, "POI radius queries", "HTTPS")
-Rel(platformsearch, hotelbeds, "Availability + content", "HTTPS")
-Rel(platformsearch, amadeus, "Availability", "HTTPS")
-Rel(location, nominatim, "Geocoding", "HTTPS")
-
-Rel(identity, db, "Users, credentials")
-Rel(saved, db, "Search snapshots")
-
-@enduml
-```
+![Component Diagram](diagrams/component.svg)
 
 ### 6.3 Deployment Diagram
 
 Physical containers and network boundaries.
 
-```plantuml
-@startuml Deployment Diagram
-!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Deployment.puml
-
-Deployment_Node(browser, "User's Browser") {
-    Container(blazor, "Blazor WASM", "WebAssembly", "SPA downloaded on first visit, runs entirely client-side")
-}
-
-Deployment_Node(docker, "Docker Host") {
-    Deployment_Node(app_container, "App Container") {
-        Container(backend, "ASP.NET Core Backend", ".NET", "All modules in a single process")
-    }
-
-    Deployment_Node(db_container, "Database Container") {
-        ContainerDb(db, "PostgreSQL", "SQL", "Users, credentials, saved searches")
-    }
-}
-
-Deployment_Node(external, "External Services (Internet)") {
-    System_Ext(hotelbeds, "Hotelbeds API")
-    System_Ext(amadeus, "Amadeus API (Phase 2)")
-    System_Ext(ai, "AI Provider")
-    System_Ext(nominatim, "Nominatim")
-    System_Ext(overpass, "Overpass API")
-}
-
-Rel(blazor, backend, "API calls", "HTTPS")
-Rel(backend, db, "Queries", "TCP/5432")
-Rel(backend, hotelbeds, "Availability + content", "HTTPS")
-Rel(backend, amadeus, "Availability", "HTTPS")
-Rel(backend, ai, "LLM calls", "HTTPS")
-Rel(backend, nominatim, "Geocoding", "HTTPS")
-Rel(backend, overpass, "POI queries", "HTTPS")
-
-@enduml
-```
+![Deployment Diagram](diagrams/deployment.svg)
 
 ### 6.4 Search Flow Sequence Diagram
 
 The end-to-end search pipeline — the most complex flow in the system.
 
-```plantuml
-@startuml Search Flow
-!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
-
-actor User
-participant "Presentation\n(Blazor)" as UI
-participant "Intake Agent" as Intake
-participant "AI Provider" as AI
-participant "Search\nOrchestration" as Orch
-participant "Location\nResolution" as Loc
-participant "Nominatim" as Nom
-participant "Platform Search" as PS
-participant "Hotelbeds API" as HB
-participant "Result\nProcessing" as RP
-participant "Overpass API" as OV
-participant "AI Provider " as AI2
-
-== Intake Conversation ==
-
-User -> UI: Natural language message
-UI -> Intake: User message
-Intake -> AI: Conversation prompt
-AI --> Intake: Follow-up question
-Intake --> UI: AI response
-UI --> User: Display question
-
-note over User, Intake: Repeats until agent is satisfied\n(max 3 follow-up turns)
-
-User -> UI: Answers
-UI -> Intake: User message
-Intake -> AI: Conversation prompt
-AI --> Intake: SearchRequest JSON
-Intake --> UI: Confirmation card
-UI --> User: Display confirmation card
-
-== Search Execution ==
-
-User -> UI: Confirms search
-UI -> Orch: Confirmed SearchRequest
-
-Orch -> Loc: Destination string
-Loc -> Nom: Geocode request
-Nom --> Loc: Coordinates
-Loc --> Orch: Resolved location
-
-Orch -> PS: SearchRequest + location
-PS -> HB: Availability + content query
-HB --> PS: Raw hotel data
-PS --> Orch: HotelResult[]
-
-Orch -> RP: SearchRequest + HotelResult[]
-
-== Result Processing Pipeline ==
-
-RP -> RP: Step 1: Hard-constraint filtering\n(budget, star rating)
-
-alt LocationConstraint present
-    RP -> AI2: Extract POI categories from constraint
-    AI2 --> RP: Categories
-    loop For each candidate (≤20)
-        RP -> OV: POI radius query\n(hotel coords + category)
-        OV --> RP: Nearby POIs + distances
-    end
-    RP -> RP: Step 2: Populate NearbyPOIs
-end
-
-RP -> AI2: Rank candidates with\nSearchRequest + facilities + POI data
-AI2 --> RP: Scores + explanations
-RP --> Orch: Ranked HotelResult[]
-
-Orch --> UI: Ranked results
-UI --> User: Display result cards
-
-== Availability Verification ==
-
-User -> UI: Selects a property
-UI -> Orch: Hotel + offer ID
-Orch -> PS: CheckRate request
-PS -> HB: CheckRate API call
-HB --> PS: Verified price / availability
-PS --> Orch: Verification result
-Orch --> UI: Verified details + booking URL
-UI --> User: Property detail view\nwith "Book on Google Hotels" button
-
-@enduml
-```
+![Search Flow](diagrams/search-flow.svg)
