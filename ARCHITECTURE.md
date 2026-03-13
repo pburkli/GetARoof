@@ -1,6 +1,6 @@
 # GetARoof — Architecture
 
-This document defines the architecture for GetARoof. It follows a reasoning-first structure: quality attributes and constraints (Section 1), logical components (Section 2), architectural style (Section 3), then concrete design decisions (Section 4).
+This document defines the architecture for GetARoof. It follows a reasoning-first structure: quality attributes and constraints (Section 1), logical components (Section 2), architectural style (Section 3), concrete design decisions (Section 4), architectural decision records (Section 5), and architecture diagrams (Section 6).
 
 ---
 
@@ -605,3 +605,400 @@ The `BookingUrl` field on `HotelResult` is a plain string. Changing the link gen
 #### Risk
 
 Google Hotels URL format is not a documented stable API. The worst case is the user lands on a Google Hotels page that doesn't perfectly pre-fill. They can still search manually. Acceptable risk.
+
+---
+
+## 5. Architectural Decision Records
+
+### Decision Register
+
+| ADR | Title | Status | Drivers |
+|---|---|---|---|
+| 001 | Modular monolith as architectural style | Accepted | Maintainability, Interoperability, Reliability |
+| 002 | Shared database across all modules | Accepted | Reliability, Deployability, GDPR |
+| 003 | Platform adapter interface for extensibility | Accepted | Maintainability, Interoperability |
+| 004 | Semantic Kernel as AI abstraction boundary | Accepted | Maintainability, .NET stack constraint |
+| 005 | Hybrid ranking strategy | Accepted | Performance, Maintainability, Reliability |
+| 006 | Google Hotels deep link for external booking | Accepted | Non-goal (no in-app booking), cost constraint |
+| 007 | Free-text preferences over structured enums | Accepted | Maintainability, Interoperability |
+
+---
+
+### ADR-001: Modular Monolith as Architectural Style
+
+**Status:** Accepted | **Date:** 2026-03-13
+
+**Context:**
+Solo-developer search application integrating multiple external platform APIs. Critical characteristics: maintainability/extensibility, interoperability, reliability. Target: 50 concurrent sessions, Docker deployment, no cloud-specific dependencies.
+
+**Decision:**
+Modular monolith — domain-partitioned modules, monolithic deployment. Each logical component becomes a .NET project with boundaries enforced by project references and `internal` access modifiers.
+
+**Alternatives Considered:**
+- **Layered** — No structural enforcement of domain isolation. Boundary erosion risk with Phase 2 already planned.
+- **Microkernel** — Only Platform Search fits the plugin model. In practice identical to interface + DI registration.
+- **Microservices** — No driver for independent deployment/scaling. Operational overhead unjustified.
+- **Event-driven** — Core workflow is request-response. No async workflows or fan-out.
+
+**Consequences:**
+- (+) Compiler-enforced boundaries, simple deployment, in-process communication, atomic cross-module operations
+- (−) No independent scaling per component. Erosion risk mitigated by compiler, not code review.
+
+**Drivers:** Maintainability/Extensibility, Interoperability, Reliability, solo developer constraint.
+
+---
+
+### ADR-002: Shared Database Across All Modules
+
+**Status:** Accepted | **Date:** 2026-03-13
+
+**Context:**
+The modular monolith (ADR-001) needs a data strategy. Modules that persist data: Identity & Accounts (users, credentials), Saved Searches (search snapshots). GDPR requires atomic deletion of all user data.
+
+**Decision:**
+Single shared PostgreSQL database. Each module owns its tables and accesses only its own data. No cross-module joins — modules reference each other by ID only.
+
+**Alternatives Considered:**
+- **Database per module** — Stronger isolation but makes atomic GDPR deletion a distributed coordination problem. Adds operational overhead for a solo developer with only two persisting modules.
+- **Shared database, shared tables** — Simpler but erases ownership boundaries. Any module could read or write another's data.
+
+**Consequences:**
+- (+) Atomic cross-module transactions (GDPR deletion in one commit). Single database to operate, back up, and migrate.
+- (−) Risk of cross-module coupling through the database if table ownership discipline lapses. Harder to extract a module into a separate service later.
+
+**Drivers:** Reliability (atomic operations), Deployability (single database), solo developer constraint, GDPR.
+
+---
+
+### ADR-003: Platform Adapter Interface for Extensibility
+
+**Status:** Accepted | **Date:** 2026-03-13
+
+**Context:**
+The system must support multiple accommodation platforms (Hotelbeds Phase 1, Amadeus Phase 2, more planned). Adding a platform must not require changes to orchestration, ranking, or UI.
+
+**Decision:**
+Define an `IPlatformAdapter` interface in the Platform Search module. Each platform implements it in a separate .NET project. Adapters are registered via DI. Search Orchestration calls all registered adapters — it does not know which platforms exist.
+
+**Alternatives Considered:**
+- **Direct integration without interface** — Faster initially but every new platform requires changes to orchestration logic. Violates the top-priority maintainability characteristic.
+- **Plugin loading via assembly scanning** — Stronger isolation but over-engineered. DI registration achieves the same result without runtime assembly loading complexity.
+
+**Consequences:**
+- (+) New platform = new project, implement interface, register. Zero changes elsewhere. Validated by scenario S1.
+- (−) All adapters must conform to a single interface. If a platform has fundamentally different capabilities, the interface may need extension — which affects all adapters.
+
+**Drivers:** Maintainability/Extensibility (critical), Interoperability (critical).
+
+---
+
+### ADR-004: Semantic Kernel as AI Abstraction Boundary
+
+**Status:** Accepted | **Date:** 2026-03-13
+
+**Context:**
+Two components use LLM calls: Intake Agent (conversation) and Result Processing (ranking). The requirements mandate no hard dependency on a single AI vendor.
+
+**Decision:**
+Use Microsoft Semantic Kernel as the abstraction layer for all AI provider interactions. Business logic depends on Semantic Kernel abstractions, not on provider-specific SDKs.
+
+**Alternatives Considered:**
+- **Direct provider SDK calls** — Simpler initially but swapping providers means rewriting all call sites.
+- **Custom abstraction layer** — Full control but duplicates what Semantic Kernel already provides. Maintenance burden for a solo developer.
+
+**Consequences:**
+- (+) Swap AI provider by changing configuration and connector. Business logic unchanged. Validated by scenario S2.
+- (−) Couples to Microsoft's abstraction. If Semantic Kernel's API changes or is abandoned, all AI-consuming modules are affected. Acceptable risk given active maintenance and .NET ecosystem alignment.
+
+**Drivers:** Maintainability/Extensibility (critical), .NET tech stack constraint.
+
+---
+
+### ADR-005: Hybrid Ranking Strategy (Code Filters + POI Enrichment + LLM)
+
+**Status:** Accepted | **Date:** 2026-03-13
+
+**Context:**
+Users express preferences in free text ("near the lake", "quiet area", "breakfast included"). The system must rank results against these preferences within a 30-second budget. Platform APIs return 50–200 candidates.
+
+**Decision:**
+Three-step pipeline: (1) hard-constraint filtering in code (budget, star rating) to reduce candidates, (2) POI enrichment via Overpass API for location constraints (≤20 candidates), (3) LLM ranking with scores and explanations for the enriched set.
+
+**Alternatives Considered:**
+- **Pure LLM ranking of all candidates** — Too slow and expensive. Sending 200 hotels with full details to an LLM exceeds latency and token budgets.
+- **Pure rules-based ranking** — Cannot interpret free-text preferences ("quiet area away from nightlife"). Would require mapping every preference to structured filters.
+- **LLM ranking without POI enrichment** — The LLM cannot evaluate location constraints without distance data.
+
+**Consequences:**
+- (+) Keeps LLM calls small (≤20 candidates). Code filters are fast and deterministic. POI data gives the LLM concrete facts. Fallback to price-sort if LLM fails.
+- (−) Three-step pipeline adds orchestration complexity. POI queries add latency. Cap of 20 candidates means some valid matches may be excluded from ranking.
+
+**Drivers:** Performance (30s budget), Maintainability (free-text preferences), Reliability (fallback strategy).
+
+---
+
+### ADR-006: Google Hotels Deep Link for External Booking
+
+**Status:** Accepted | **Date:** 2026-03-13
+
+**Context:**
+GetARoof does not process bookings. The user needs a path from a selected hotel to completing a reservation. No affiliate agreements or platform booking APIs are available.
+
+**Decision:**
+Construct a Google Hotels URL from hotel name, city, dates, and guest count. Display as a single "Book on Google Hotels" button that opens in a new tab.
+
+**Alternatives Considered:**
+- **Platform-specific booking deep links** — Hotelbeds and Amadeus are B2B APIs. Completing a booking would require becoming a reseller.
+- **No booking link** — User would have to search manually on booking platforms. Defeats the purpose of the app.
+
+**Consequences:**
+- (+) Zero integration effort. Works for any hotel. Shows prices across multiple booking channels.
+- (−) Google Hotels URL format is undocumented. Worst case: user lands on a page that doesn't perfectly pre-fill. Acceptable risk.
+
+**Drivers:** Non-goal (no in-app booking), cost constraint (no affiliate agreements).
+
+---
+
+### ADR-007: Free-Text Preferences Over Structured Enums
+
+**Status:** Accepted | **Date:** 2026-03-13
+
+**Context:**
+Users describe preferences in natural language: "breakfast included", "pet-friendly", "quiet area". These must be evaluated against hotel data from platforms with different facility taxonomies.
+
+**Decision:**
+Store preferences as `string[]` in `SearchRequest`. No enum mapping at the model level. The LLM ranking step (ADR-005) interprets preferences against hotel facilities and POI data.
+
+**Alternatives Considered:**
+- **Structured preference enum** — Enables deterministic filtering but requires maintaining a cross-platform facility taxonomy. Fails for subjective preferences ("quiet area", "good for families").
+- **Hybrid (enum for common + free-text for rest)** — More complexity for marginal benefit. The LLM handles both categories equally well.
+
+**Consequences:**
+- (+) Supports any preference without model changes. No cross-platform taxonomy maintenance.
+- (−) Preferences cannot be used for deterministic pre-filtering. A preference like "breakfast included" could have been a cheap code filter but is instead evaluated by the LLM.
+
+**Drivers:** Maintainability/Extensibility (no enum maintenance), Interoperability (no cross-platform taxonomy).
+
+---
+
+## 6. Architecture Diagrams
+
+All diagrams use the [C4 model](https://c4model.com/) with PlantUML.
+
+### 6.1 Context Diagram
+
+The system, its users, and all external dependencies.
+
+```plantuml
+@startuml Context Diagram
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+Person(user, "User", "Group organizer or traveler")
+
+System(getaroof, "GetARoof", "AI-driven accommodation search with natural language input, multi-platform results, and external booking links")
+
+System_Ext(hotelbeds, "Hotelbeds API", "Hotel availability + content")
+System_Ext(amadeus, "Amadeus API", "Hotel availability (Phase 2)")
+System_Ext(ai, "AI Provider", "OpenAI / Anthropic via Semantic Kernel")
+System_Ext(nominatim, "Nominatim", "Geocoding")
+System_Ext(overpass, "Overpass API", "POI queries")
+System_Ext(google, "Google Hotels", "External booking")
+
+Rel(user, getaroof, "Searches for accommodation", "HTTPS")
+Rel(user, google, "Books externally", "Browser link")
+Rel(getaroof, hotelbeds, "Availability + content queries", "HTTPS")
+Rel(getaroof, amadeus, "Availability queries", "HTTPS")
+Rel(getaroof, ai, "Intake conversation + ranking", "HTTPS")
+Rel(getaroof, nominatim, "Geocode destinations", "HTTPS")
+Rel(getaroof, overpass, "POI radius queries", "HTTPS")
+Rel(getaroof, google, "Constructs deep link", "URL")
+
+@enduml
+```
+
+### 6.2 Component Diagram
+
+All modules, their interactions, and external system dependencies.
+
+```plantuml
+@startuml Component Diagram
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+Person(user, "User")
+
+Container_Boundary(frontend, "Blazor WASM (Browser)") {
+    Component(presentation, "Presentation", "Blazor", "Chat UI, search results, property details, saved searches")
+}
+
+Container_Boundary(backend, "ASP.NET Core Backend (Docker)") {
+    Component(intake, "Intake Agent", "Module", "Pre-search conversation, produces SearchRequest")
+    Component(orchestration, "Search Orchestration", "Module", "Coordinates search workflow, handles failures")
+    Component(platformsearch, "Platform Search", "Module", "Platform adapters behind IPlatformAdapter")
+    Component(resultprocessing, "Result Processing", "Module", "Filtering, POI enrichment, LLM ranking")
+    Component(identity, "Identity & Accounts", "Module", "Registration, authentication, GDPR deletion")
+    Component(saved, "Saved Searches", "Module", "Persist and retrieve past searches")
+    Component(location, "Location Resolution", "Service", "Geocode destinations via Nominatim")
+}
+
+ContainerDb(db, "PostgreSQL", "Shared database, per-module table ownership")
+
+System_Ext(hotelbeds, "Hotelbeds API")
+System_Ext(amadeus, "Amadeus API (Phase 2)")
+System_Ext(ai, "AI Provider")
+System_Ext(nominatim, "Nominatim")
+System_Ext(overpass, "Overpass API")
+
+Rel(user, presentation, "Messages, confirmations, selections")
+Rel(presentation, intake, "User messages", "HTTPS")
+Rel(presentation, orchestration, "Confirmed SearchRequest / hotel selection", "HTTPS")
+Rel(presentation, identity, "Register / login / delete", "HTTPS")
+Rel(presentation, saved, "Save / list / view searches", "HTTPS")
+
+Rel(orchestration, location, "Destination string")
+Rel(orchestration, platformsearch, "SearchRequest + location")
+Rel(orchestration, resultprocessing, "SearchRequest + HotelResult[]")
+
+Rel(intake, ai, "Conversation", "HTTPS")
+Rel(resultprocessing, ai, "Ranking prompt", "HTTPS")
+Rel(resultprocessing, overpass, "POI radius queries", "HTTPS")
+Rel(platformsearch, hotelbeds, "Availability + content", "HTTPS")
+Rel(platformsearch, amadeus, "Availability", "HTTPS")
+Rel(location, nominatim, "Geocoding", "HTTPS")
+
+Rel(identity, db, "Users, credentials")
+Rel(saved, db, "Search snapshots")
+
+@enduml
+```
+
+### 6.3 Deployment Diagram
+
+Physical containers and network boundaries.
+
+```plantuml
+@startuml Deployment Diagram
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Deployment.puml
+
+Deployment_Node(browser, "User's Browser") {
+    Container(blazor, "Blazor WASM", "WebAssembly", "SPA downloaded on first visit, runs entirely client-side")
+}
+
+Deployment_Node(docker, "Docker Host") {
+    Deployment_Node(app_container, "App Container") {
+        Container(backend, "ASP.NET Core Backend", ".NET", "All modules in a single process")
+    }
+
+    Deployment_Node(db_container, "Database Container") {
+        ContainerDb(db, "PostgreSQL", "SQL", "Users, credentials, saved searches")
+    }
+}
+
+Deployment_Node(external, "External Services (Internet)") {
+    System_Ext(hotelbeds, "Hotelbeds API")
+    System_Ext(amadeus, "Amadeus API (Phase 2)")
+    System_Ext(ai, "AI Provider")
+    System_Ext(nominatim, "Nominatim")
+    System_Ext(overpass, "Overpass API")
+}
+
+Rel(blazor, backend, "API calls", "HTTPS")
+Rel(backend, db, "Queries", "TCP/5432")
+Rel(backend, hotelbeds, "Availability + content", "HTTPS")
+Rel(backend, amadeus, "Availability", "HTTPS")
+Rel(backend, ai, "LLM calls", "HTTPS")
+Rel(backend, nominatim, "Geocoding", "HTTPS")
+Rel(backend, overpass, "POI queries", "HTTPS")
+
+@enduml
+```
+
+### 6.4 Search Flow Sequence Diagram
+
+The end-to-end search pipeline — the most complex flow in the system.
+
+```plantuml
+@startuml Search Flow
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+actor User
+participant "Presentation\n(Blazor)" as UI
+participant "Intake Agent" as Intake
+participant "AI Provider" as AI
+participant "Search\nOrchestration" as Orch
+participant "Location\nResolution" as Loc
+participant "Nominatim" as Nom
+participant "Platform Search" as PS
+participant "Hotelbeds API" as HB
+participant "Result\nProcessing" as RP
+participant "Overpass API" as OV
+participant "AI Provider " as AI2
+
+== Intake Conversation ==
+
+User -> UI: Natural language message
+UI -> Intake: User message
+Intake -> AI: Conversation prompt
+AI --> Intake: Follow-up question
+Intake --> UI: AI response
+UI --> User: Display question
+
+note over User, Intake: Repeats until agent is satisfied\n(max 3 follow-up turns)
+
+User -> UI: Answers
+UI -> Intake: User message
+Intake -> AI: Conversation prompt
+AI --> Intake: SearchRequest JSON
+Intake --> UI: Confirmation card
+UI --> User: Display confirmation card
+
+== Search Execution ==
+
+User -> UI: Confirms search
+UI -> Orch: Confirmed SearchRequest
+
+Orch -> Loc: Destination string
+Loc -> Nom: Geocode request
+Nom --> Loc: Coordinates
+Loc --> Orch: Resolved location
+
+Orch -> PS: SearchRequest + location
+PS -> HB: Availability + content query
+HB --> PS: Raw hotel data
+PS --> Orch: HotelResult[]
+
+Orch -> RP: SearchRequest + HotelResult[]
+
+== Result Processing Pipeline ==
+
+RP -> RP: Step 1: Hard-constraint filtering\n(budget, star rating)
+
+alt LocationConstraint present
+    RP -> AI2: Extract POI categories from constraint
+    AI2 --> RP: Categories
+    loop For each candidate (≤20)
+        RP -> OV: POI radius query\n(hotel coords + category)
+        OV --> RP: Nearby POIs + distances
+    end
+    RP -> RP: Step 2: Populate NearbyPOIs
+end
+
+RP -> AI2: Rank candidates with\nSearchRequest + facilities + POI data
+AI2 --> RP: Scores + explanations
+RP --> Orch: Ranked HotelResult[]
+
+Orch --> UI: Ranked results
+UI --> User: Display result cards
+
+== Availability Verification ==
+
+User -> UI: Selects a property
+UI -> Orch: Hotel + offer ID
+Orch -> PS: CheckRate request
+PS -> HB: CheckRate API call
+HB --> PS: Verified price / availability
+PS --> Orch: Verification result
+Orch --> UI: Verified details + booking URL
+UI --> User: Property detail view\nwith "Book on Google Hotels" button
+
+@enduml
+```
