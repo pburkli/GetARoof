@@ -13,3 +13,6 @@ obj/
 *.user
 *.suo
 *.DotSettings.user
+
+# PlantUML / JVM font cache from Docker rendering
+diagrams/?/
