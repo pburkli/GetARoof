@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GetARoof.Contracts\GetARoof.Contracts.csproj" />
+    <ProjectReference Include="..\GetARoof.SearchOrchestration\GetARoof.SearchOrchestration.csproj" />
+    <ProjectReference Include="..\GetARoof.IntakeAgent\GetARoof.IntakeAgent.csproj" />
+    <ProjectReference Include="..\GetARoof.ResultProcessing\GetARoof.ResultProcessing.csproj" />
+    <ProjectReference Include="..\GetARoof.LocationResolution\GetARoof.LocationResolution.csproj" />
+    <ProjectReference Include="..\GetARoof.IdentityAndAccounts\GetARoof.IdentityAndAccounts.csproj" />
+    <ProjectReference Include="..\GetARoof.SavedSearches\GetARoof.SavedSearches.csproj" />
+    <ProjectReference Include="..\GetARoof.Platforms.Hotelbeds\GetARoof.Platforms.Hotelbeds.csproj" />
+  </ItemGroup>
+
+</Project>

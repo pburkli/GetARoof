@@ -1,0 +1,6 @@
+@GetARoof.Host_HostAddress = http://localhost:5241
+
+GET {{GetARoof.Host_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

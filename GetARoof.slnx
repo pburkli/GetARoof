@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/GetARoof.Contracts/GetARoof.Contracts.csproj" />
+    <Project Path="src/GetARoof.Host/GetARoof.Host.csproj" />
+    <Project Path="src/GetARoof.IdentityAndAccounts/GetARoof.IdentityAndAccounts.csproj" />
+    <Project Path="src/GetARoof.IntakeAgent/GetARoof.IntakeAgent.csproj" />
+    <Project Path="src/GetARoof.LocationResolution/GetARoof.LocationResolution.csproj" />
+    <Project Path="src/GetARoof.Platforms.Hotelbeds/GetARoof.Platforms.Hotelbeds.csproj" />
+    <Project Path="src/GetARoof.Presentation/GetARoof.Presentation.csproj" />
+    <Project Path="src/GetARoof.ResultProcessing/GetARoof.ResultProcessing.csproj" />
+    <Project Path="src/GetARoof.SavedSearches/GetARoof.SavedSearches.csproj" />
+    <Project Path="src/GetARoof.SearchOrchestration/GetARoof.SearchOrchestration.csproj" />
+  </Folder>
+</Solution>
