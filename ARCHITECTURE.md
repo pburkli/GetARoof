@@ -2,6 +2,8 @@
 
 This document defines the architecture for GetARoof. It follows a reasoning-first structure: quality attributes and constraints (Section 1), logical components (Section 2), architectural style (Section 3), concrete design decisions (Section 4), architectural decision records (Section 5), and architecture diagrams (Section 6).
 
+**Phase references:** Phase 1 (MVP, Hotelbeds only) and Phase 2 (multi-platform, adds Amadeus) are defined in [requirements.md](requirements.md).
+
 ---
 
 ## 1. Architectural Characteristics
@@ -300,45 +302,9 @@ Location Resolution → Nominatim (geocoding)
 
 Each logical component from Section 2 becomes an internal module with explicit boundaries enforced by .NET project references and `internal` access modifiers. The system deploys as a single container.
 
-### 3.2 Rationale
+For rationale, rejected alternatives, and trade-offs, see [ADR-001](#adr-001-modular-monolith-as-architectural-style).
 
-The three critical characteristics (maintainability/extensibility, interoperability, reliability) all require structural isolation of domain components. The modular monolith provides this through module boundaries enforced by the .NET project system, while keeping monolithic deployment simplicity — which matches the solo developer, Docker-based, cloud-agnostic constraints.
-
-- **Maintainability / Extensibility:** Module boundaries enforce the "add adapter = implement interface + register, no other code changes" requirement at compile time. Swapping the AI provider stays contained within modules that use Semantic Kernel.
-- **Interoperability:** Each platform adapter lives in its own module (or sub-module). A breaking change in one platform's API affects only that adapter's code.
-- **Reliability / Resilience:** In-process communication between modules makes error handling simpler and more predictable than distributed alternatives. Parallel adapter calls with independent error handling are straightforward with async/await.
-- **Performance:** No serialization or network overhead between modules. The entire 30-second latency budget goes to external I/O, not internal communication.
-- **Deployability:** Single container, `docker compose up`, no service discovery or message broker infrastructure.
-
-### 3.3 Rejected Alternatives
-
-**Layered Architecture** — Does not structurally enforce domain isolation. Technical layers (Controllers → Services → Repositories) cut across domain boundaries, so adapter isolation relies on developer discipline rather than compiler enforcement. Phase 2 (Amadeus) is already planned, making this a concrete risk — not a hypothetical one. Fastest to start but trades long-term structural clarity for short-term velocity.
-
-**Microkernel (Core + Plugin)** — Solves adapter extensibility well, but only one of seven components (Platform Search) fits the plugin model. The remaining six components are core, not extensions. In practice the plugin mechanism — interface + DI registration — is identical to what the modular monolith provides through module boundaries. Adds conceptual overhead (core-vs-plugin distinction, plugin infrastructure) without additional structural benefit. .NET also lacks first-class microkernel support, so the plugin infrastructure would need to be built manually.
-
-**Microservices** — No driver for distributed deployment. The system has seven components built by a solo developer targeting 50 concurrent sessions. There is no need for independent deployment, independent scaling, or team autonomy. Operational overhead (service discovery, inter-service communication, distributed tracing, per-service databases) is unjustified. Every quality scenario passes with in-process communication.
-
-**Event-Driven Architecture** — The core workflow is request-response. There are no high-throughput event streams, no fan-out to multiple consumers, and no asynchronous workflows. Adding a message broker would introduce infrastructure complexity without solving a real problem.
-
-**Hybrid (Modular Monolith + Microkernel)** — Considered combining modular monolith for overall structure with microkernel for Platform Search. In practice, this is exactly what a well-designed modular monolith already does: Platform Search defines an `IPlatformAdapter` interface, each platform implements it, DI handles registration. Adding the microkernel label doesn't change the code.
-
-### 3.4 Trade-off Summary
-
-**Gained:**
-- Compiler-enforced module boundaries via .NET project references and `internal` access modifiers
-- Clean adapter extensibility — new platform = new project, implement interface, register
-- Simple deployment — single container, no distributed infrastructure
-- Low operational overhead — one process to monitor, deploy, and debug
-- Atomic cross-module operations — GDPR data deletion in a single database transaction
-- Straightforward parallel orchestration via async/await in a shared process
-
-**Accepted:**
-- More upfront project structure work than layered architecture (hours, not days) to define module projects, configure DI registration per module, and set up project reference direction
-- Risk of modular erosion if module boundaries are not maintained — mitigated by `internal` access modifiers and compile-time project reference enforcement, which is stronger than convention alone
-- Cannot independently deploy or scale individual components — no current or foreseeable requirement justifies this capability
-- If a component ever needed dedicated hardware (e.g., GPU for AI processing), extraction into a separate service would be required — but module boundaries already define the interfaces that would make this extraction straightforward
-
-### 3.5 Scenario Validation
+### 3.2 Scenario Validation
 
 All 12 quality scenarios from Section 1.5 were walked through against the modular monolith. All pass without workarounds or compromises.
 
@@ -363,87 +329,21 @@ All 12 quality scenarios from Section 1.5 were walked through against the modula
 
 ### 4.1 Domain Models
 
-Two core models flow through the system: `SearchRequest` (input to the search layer) and `HotelResult` (output to the UI).
+Two core models flow through the system: `SearchRequest` (input to the search layer) and `HotelResult` (output to the UI). Field-level definitions are in [MODELS.md](MODELS.md).
 
 #### SearchRequest
 
 Produced by the AI intake agent, consumed by platform adapters.
 
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| Destination | string | Yes | City name or area description ("Zürich", "Lake Lucerne area") |
-| CheckIn | date | Yes | |
-| CheckOut | date | Yes | |
-| Rooms | Room[] | Yes | At least one room with ≥1 adult |
-| TotalBudget | decimal? | No | Max total stay price in user's currency |
-| NightlyBudget | decimal? | No | Max per-night price |
-| Currency | string | No | Defaults to EUR |
-| Preferences | string[] | No | Free-text preferences: "breakfast included", "parking", "pool", "pet-friendly" |
-| MinStarRating | int? | No | Minimum hotel star rating (1–5) |
-| LocationConstraint | string? | No | Free-text: "near the lake", "walking distance to old town" |
-
-**Room:**
-
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| Adults | int | Yes | ≥1 |
-| ChildrenAges | int[] | No | Empty if no children |
-| Label | string? | No | Display label: "grandparents", "family with kids" |
-
 **Key decisions:**
 - Rooms are an explicit array, not a flat guest count — because group trips need specific per-room configurations. This maps directly to how Hotelbeds availability search works.
 - Both budget types are nullable. The AI extracts whichever the user stated.
-- Preferences are free-text strings, not an enum. Different platforms have different facility taxonomies; mapping happens in the ranking/matching layer, not the model.
+- Preferences are free-text strings, not an enum — see [ADR-007](#adr-007-free-text-preferences-over-structured-enums).
 - LocationConstraint is free text. It is evaluated downstream via POI enrichment and AI ranking (Section 4.3), not parsed into structured filters.
 
 #### HotelResult
 
 Produced by platform adapters + ranking layer, consumed by the frontend.
-
-| Field | Type | Notes |
-|-------|------|-------|
-| Id | string | Platform-specific hotel ID |
-| Platform | string | "Hotelbeds", "Amadeus" |
-| Name | string | |
-| Description | string | |
-| StarRating | decimal? | 1–5 |
-| Location | Location | Address, city, country, lat/lng |
-| Images | Image[] | URL + optional caption |
-| Facilities | string[] | "Free WiFi", "Pool", "Parking" |
-| Offers | Offer[] | One or more room/rate combinations |
-| MatchScore | int? | 0–100, set by ranking step |
-| MatchExplanation | string? | AI-generated match summary |
-| NearbyPOIs | NearbyPOI[] | Nearby points of interest with distances, populated by POI enrichment step |
-| BookingUrl | string? | External booking link, constructed by the application |
-
-**Offer:**
-
-| Field | Type | Notes |
-|-------|------|-------|
-| OfferId | string | Platform-specific, needed for CheckRate |
-| Rooms | OfferRoom[] | Room details for this combination |
-| TotalPrice | decimal | |
-| Currency | string | |
-| CancellationPolicy | string? | |
-| IsPriceVerified | bool | True after CheckRate |
-
-**OfferRoom:**
-
-| Field | Type | Notes |
-|-------|------|-------|
-| RoomName | string | "Double Standard", "Family Suite" |
-| BoardType | string? | "Breakfast included", "Room only" |
-| Adults | int | |
-| Children | int | |
-| BedDescription | string? | |
-
-**NearbyPOI:**
-
-| Field | Type | Notes |
-|-------|------|-------|
-| Name | string | "Zürich HB", "Migros Langstrasse" |
-| Category | string | "train_station", "supermarket", "restaurant", etc. |
-| DistanceMeters | int | Straight-line distance from hotel |
 
 **Key decisions:**
 - Offers are nested under Hotel, and Rooms are nested under Offer — because different offers for the same hotel have different room configurations and prices.
@@ -460,24 +360,7 @@ The AI intake agent owns the pre-search conversation. Its only structured output
 
 #### Output schema
 
-The agent produces a JSON object matching the `SearchRequest` model (Section 4.1). Example:
-
-```json
-{
-  "destination": "Zürich",
-  "checkIn": "2026-07-15",
-  "checkOut": "2026-07-20",
-  "rooms": [
-    { "adults": 2, "childrenAges": [], "label": "grandparents" },
-    { "adults": 2, "childrenAges": [8, 5], "label": "family with kids" }
-  ],
-  "totalBudget": 2000,
-  "nightlyBudget": null,
-  "currency": "CHF",
-  "preferences": ["breakfast included", "parking", "pool"],
-  "locationConstraint": "near the lake"
-}
-```
+The agent produces a JSON object matching the `SearchRequest` model (Section 4.1). See [MODELS.md](MODELS.md#intake-agent-output) for the full schema and example.
 
 #### Minimum required fields
 
@@ -526,9 +409,13 @@ Simple pass/fail checks, no AI involved:
 
 Keep this list deliberately short. The more you filter in code, the more you must map free-text preferences to structured fields — which is fragile and platform-specific.
 
+#### Candidate cap
+
+If more than 20 candidates remain after Step 2, only the top 20 (by price, ascending) proceed to Steps 3 and 4. This cap applies regardless of whether POI enrichment runs — it keeps LLM ranking calls small and fast (see [ADR-005](#adr-005-hybrid-ranking-strategy-code-filters--poi-enrichment--llm)).
+
 #### Step 3 — POI enrichment (conditional)
 
-Runs only when `SearchRequest.LocationConstraint` is present. If more than 20 candidates remain after Step 2, only the top 20 (by price, ascending) proceed to enrichment and ranking. For each remaining candidate:
+Runs only when `SearchRequest.LocationConstraint` is present. For each candidate (≤20):
 
 1. The LLM extracts relevant POI categories from the free-text constraint (e.g., "within walking distance of a grocery store" → `supermarket`; "not further than 100m from a train station" → `train_station`).
 2. Query the POI service (OpenStreetMap Overpass API) with the hotel's lat/lng and a reasonable search radius (default 1km) for each category.
@@ -542,30 +429,16 @@ This step converts vague location constraints into concrete distance data that t
 
 #### Step 4 — AI ranking (LLM)
 
-Send remaining candidates (the same ≤20 from Step 3, or all candidates if Step 3 was skipped) to the LLM along with the original `SearchRequest`. The LLM:
+Send remaining candidates (≤20 after the candidate cap) to the LLM along with the original `SearchRequest`. The LLM:
 1. Scores each hotel 0–100 for overall fit.
 2. Writes a one-sentence match explanation.
 3. Returns the top results ordered by score.
 
 The prompt includes: hotel name, facilities, room/board descriptions, price, location, and nearby POI distances (when available). It does **not** include images (the LLM cannot evaluate those).
 
-**Why not pure rules-based ranking?** User preferences are free-text and varied. Mapping "quiet area away from nightlife" to structured filters is a never-ending enum game. The LLM handles this naturally.
-
-**Why not pure LLM for everything?** Cost and latency. Letting the platform API and code filters narrow the set to ~20 keeps the LLM call fast and cheap.
-
 #### LLM ranking output
 
-```json
-[
-  {
-    "hotelId": "HB-12345",
-    "score": 92,
-    "explanation": "Excellent fit: 2 rooms match your group exactly, breakfast included, 400m from the lake, well within budget at CHF 1'650 total."
-  }
-]
-```
-
-The backend maps scores and explanations onto `HotelResult.MatchScore` and `HotelResult.MatchExplanation`.
+See [MODELS.md](MODELS.md#llm-ranking-output) for the response schema.
 
 #### Edge cases
 
@@ -577,14 +450,7 @@ The backend maps scores and explanations onto `HotelResult.MatchScore` and `Hote
 
 ### 4.4 External Booking Link Strategy
 
-**Approach: Google Hotels deep link.**
-
-#### Why Google Hotels
-
-- Works for any hotel with no affiliate agreement.
-- Pre-fills hotel name and dates in the URL.
-- Shows prices across multiple booking platforms (Booking.com, Expedia, hotel direct) — the user picks their preferred channel.
-- Zero integration effort.
+**Approach: Google Hotels deep link.** See [ADR-006](#adr-006-google-hotels-deep-link-for-external-booking) for rationale and alternatives considered.
 
 #### URL construction
 
@@ -597,14 +463,6 @@ https://www.google.com/travel/hotels?q={hotel_name}+{city}&dates={checkIn},{chec
 #### UI treatment
 
 A single button on the hotel detail view: **"Book on Google Hotels →"**, opens in a new tab.
-
-#### Future evolution
-
-The `BookingUrl` field on `HotelResult` is a plain string. Changing the link generation strategy (e.g., to a platform-specific deep link) is a one-line change.
-
-#### Risk
-
-Google Hotels URL format is not a documented stable API. The worst case is the user lands on a Google Hotels page that doesn't perfectly pre-fill. They can still search manually. Acceptable risk.
 
 ---
 
