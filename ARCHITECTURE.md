@@ -1,6 +1,6 @@
 # GetARoof — Architecture
 
-This document defines the architecture for GetARoof. It follows a reasoning-first structure: quality attributes and constraints (Section 1), logical components (Section 2), architectural style (Section 3), concrete design decisions (Section 4), architectural decision records (Section 5), and architecture diagrams (Section 6).
+This document defines the architecture for GetARoof. It follows a reasoning-first structure: quality attributes, constraints, and stakeholders (Section 1), logical components with context and scope (Section 2), architectural style (Section 3), concrete design decisions (Section 4), architectural decision records (Section 5), architecture diagrams (Section 6), cross-cutting concepts (Section 7), risks and technical debt (Section 8), and glossary (Section 9).
 
 **Phase references:** Phase 1 (MVP, Hotelbeds only) and Phase 2 (multi-platform, adds Amadeus) are defined in [requirements.md](requirements.md).
 
@@ -142,6 +142,12 @@ A new developer clones the repo and runs `docker compose up` with a single confi
 **S12 — Concurrent search load (Scalability)**
 50 users submit search requests simultaneously against a horizontally scaled backend. All requests complete within 30 seconds. No requests are dropped. No shared in-process state between backend instances.
 
+### 1.6 Stakeholders
+
+| Role | Person | Expectations |
+|---|---|---|
+| Solo developer, architect, operator | Project owner | Full architecture documentation sufficient to resume work after breaks. Design decisions traceable to quality goals. Deployment simple enough to operate alone. |
+
 ---
 
 ## 2. Logical Components
@@ -187,7 +193,7 @@ Location Resolution is a lightweight service rather than a full component — it
 
 **Search Orchestration**
 - **Owns:** The end-to-end search workflow and coordination between components
-- **Does:** Receive confirmed `SearchRequest` from Intake Agent. Call Location Resolution. Dispatch to Platform Search (parallel in Phase 2). Pass results through Result Processing. Handle component failures — decide whether to return partial results or error messages. Construct external booking link.
+- **Does:** Receive confirmed `SearchRequest` from Presentation (originally produced by Intake Agent). Call Location Resolution. Dispatch to Platform Search (parallel in Phase 2). Pass results through Result Processing. Handle component failures — decide whether to return partial results or error messages. Construct external booking link.
 - **Does not:** Parse natural language. Call platform APIs directly. Score or rank results. Manage user accounts.
 - **Interfaces:** Accepts confirmed `SearchRequest`, returns ranked `HotelResult[]`. Accepts hotel selection, returns verified availability + booking URL.
 
@@ -215,7 +221,38 @@ Location Resolution is a lightweight service rather than a full component — it
 - **Does not:** Decide what destination to search. Query accommodation platforms. Persist any data. Produce platform-specific location codes — that mapping is the responsibility of each platform adapter.
 - **Interfaces:** Accepts destination string, returns structured location data (coordinates, display name)
 
-### 2.3 Interaction Map
+### 2.3 Context and Scope
+
+#### Business Context
+
+The system as a black box — who communicates with it and what data crosses the boundary.
+
+| Communication Partner | Input (to system) | Output (from system) |
+|---|---|---|
+| User (anonymous) | Natural language accommodation requirements, search confirmation, hotel selection | AI conversation responses, ranked hotel results with photos/pricing/maps, verified availability + booking link |
+| User (registered) | Registration/login credentials, save/retrieve requests | Auth tokens, saved search list |
+| Hotelbeds API | Availability search results, hotel content (photos, descriptions, facilities), CheckRate verification | Search parameters (destination, dates, occupancy), content queries, CheckRate requests |
+| Amadeus API *(Phase 2)* | Availability search results, hotel content | Search parameters (destination, dates, occupancy) |
+| AI Provider (via Semantic Kernel) | Intake conversation responses, ranking scores + explanations, POI category extraction | Conversation messages, hotel candidate data + SearchRequest for ranking, location constraint text for POI category extraction |
+| Nominatim | Geocoded coordinates (lat/lng, bounding box, display name) | Destination string (free-text geocoding query) |
+| Overpass API | Nearby POI data (names, categories, distances) | OverpassQL radius queries (hotel coordinates + POI categories) |
+| Google Hotels | — | *(outbound link only — no API call, constructed as URL for user)* |
+
+All external API communication is server-side. The browser communicates only with the GetARoof backend.
+
+#### Technical Context
+
+| Channel | Protocol | Notes |
+|---|---|---|
+| Browser ↔ Backend | HTTPS (REST API) | Blazor WASM SPA calls ASP.NET Core endpoints. All client communication over this single channel. |
+| Backend → Hotelbeds | HTTPS (REST) | API key + secret in headers. Rate-limited (50 req/day eval). |
+| Backend → Amadeus *(Phase 2)* | HTTPS (REST + OAuth2) | Client credentials grant for token. |
+| Backend → AI Provider | HTTPS (REST) | Via Semantic Kernel connector. API key auth. |
+| Backend → Nominatim | HTTPS (REST) | No auth. Respect usage policy (1 req/s, User-Agent). |
+| Backend → Overpass API | HTTPS (REST/POST) | No auth. OverpassQL queries. |
+| Backend → PostgreSQL | TCP (PostgreSQL wire protocol) | Connection string via environment variable. |
+
+### 2.4 Interaction Map
 
 #### Search Flow
 
@@ -270,26 +307,26 @@ Platform Search     → Amadeus API (Phase 2)
 Location Resolution → Nominatim (geocoding)
 ```
 
-### 2.4 Data Ownership
+### 2.5 Data Ownership
 
 | Data | Owner | Consumers | Persistence |
 |---|---|---|---|
 | Conversation history (pre-search messages) | Intake Agent | Presentation | Transient (per-session) |
-| `SearchRequest` | Intake Agent (produces) | Search Orchestration, Location Resolution, Platform Search, Result Processing, Saved Searches | Transient in search flow; snapshot in Saved Searches |
+| `SearchRequest` | Intake Agent (produces) | Search Orchestration, Platform Search, Result Processing, Saved Searches. Location Resolution receives only the `Destination` field. | Transient in search flow; snapshot in Saved Searches |
 | `HotelResult[]` | Platform Search (produces), Result Processing (enriches) | Search Orchestration, Presentation, Saved Searches | Transient in search flow; snapshot in Saved Searches |
 | User accounts (email, hashed password, metadata) | Identity & Accounts | Saved Searches (user ID reference), Presentation (auth state) | Persistent (database) |
 | Auth tokens | Identity & Accounts | Presentation | Short-lived (token store) |
 | Saved search records | Saved Searches | Presentation | Persistent (database) |
 | API credentials and provider config | Configuration (cross-cutting) | Platform Search, Intake Agent, Result Processing, Location Resolution | Persistent (environment variables / config files) |
 
-### 2.5 Boundary Issues and Risks
+### 2.6 Boundary Issues and Risks
 
 | Risk | Severity | Mitigation |
 |---|---|---|
 | `SearchRequest` touched by 6 components | Moderate | Treat as a stable contract. Changes require deliberate cross-component review. |
 | `HotelResult` mutated by 3 components in sequence (Platform Search creates, Result Processing enriches, Search Orchestration adds booking URL) | Low | Pipeline order enforced by Search Orchestration. Do not allow writes outside the pipeline. |
 | Saved Searches stores `SearchRequest` + `HotelResult` snapshots — schema changes could make old data unreadable | Low | Acceptable for MVP. Add schema versioning if models evolve after users have saved searches. |
-| Search Orchestration is a hub (touches 5 other components) | Low | Keep it thin — workflow coordination and error handling only. No domain logic. If business rules creep in, push them to the appropriate component. |
+| Search Orchestration is a hub (touches 4 other components: Location Resolution, Platform Search, Result Processing, Presentation) | Low | Keep it thin — workflow coordination and error handling only. No domain logic. If business rules creep in, push them to the appropriate component. |
 | Result Processing has two distinct external dependencies (Overpass API, AI Provider) with different failure modes | Low | Already addressed by internal step structure (Section 4.3). Each step handles its own failures independently. |
 
 ---
@@ -423,7 +460,7 @@ Runs only when `SearchRequest.LocationConstraint` is present. For each candidate
 
 This step converts vague location constraints into concrete distance data that the LLM ranking step can reason about. The LLM evaluates both fuzzy constraints ("walking distance", "nearby") and exact ones ("100m") naturally when given actual distances.
 
-**Why Overpass API?** Free, no API key, good European POI coverage (train stations, supermarkets, pharmacies, etc.), supports radius queries. For ~20 hotels this is ~20 queries — manageable latency.
+**Why Overpass API?** Free, no API key, good European POI coverage (train stations, supermarkets, pharmacies, etc.), supports radius queries. For ≤20 hotels with a few categories each, this is on the order of 20–60 Overpass queries — manageable latency if batched per hotel.
 
 **Why not a hard filter?** Parsing "walking distance" into a meter threshold is fragile. The LLM handles the interpretation given concrete data.
 
@@ -699,3 +736,109 @@ Physical containers and network boundaries.
 The end-to-end search pipeline — the most complex flow in the system.
 
 ![Search Flow](diagrams/search-flow.svg)
+
+---
+
+## 7. Cross-cutting Concepts
+
+This section tracks cross-cutting design topics that affect multiple components. These are open design decisions — they will be resolved during implementation and documented here as decisions are made.
+
+### 7.1 Error Handling Strategy
+
+**Status:** Partially defined — component-level error handling is specified in Sections 4.2 (intake agent), 4.3 (ranking), and quality scenarios S4–S6. What is not yet defined:
+
+- Consistent error response shape for the REST API (error codes, message format, correlation IDs)
+- Whether to use middleware-based exception handling or per-endpoint try/catch
+- Error classification (transient vs. permanent) and retry policy beyond the AI-specific retry in Section 4.2
+
+### 7.2 Logging and Observability
+
+**Status:** Not decided.
+
+Open questions:
+- Structured logging library (e.g., Serilog, NLog, or built-in `ILogger` with JSON formatter)
+- Log levels and what to log at each level (especially for external API calls and AI interactions)
+- Health check endpoints for container orchestration
+- Whether to add distributed tracing (OpenTelemetry) or defer to post-MVP
+- Log storage and retention strategy for a solo-operated deployment
+
+### 7.3 Configuration Management
+
+**Status:** Partially defined — environment variables for API keys and database connection (§1.3 Constraints, §2.3 Technical Context). What is not yet defined:
+
+- Configuration layering (appsettings.json → environment variables → secrets)
+- Which settings are runtime-configurable vs. requiring a restart
+- Feature flags for Phase 1 vs. Phase 2 functionality (if needed)
+
+### 7.4 Authentication and Authorization Flow
+
+**Status:** Partially defined — ASP.NET Core Identity chosen, token-based auth mentioned (§1.2 Security definition, requirements.md §5). What is not yet defined:
+
+- JWT vs. cookie-based authentication for the Blazor WASM ↔ API boundary
+- Token storage on the client side (localStorage, sessionStorage, or in-memory)
+- Token lifetime and refresh rotation specifics
+- Authorization model beyond authenticated/anonymous (currently no roles or permissions needed)
+
+### 7.5 API Design Conventions
+
+**Status:** Not decided.
+
+Open questions:
+- URL structure and versioning (e.g., `/api/v1/...`)
+- Consistent response envelope or direct resource serialization
+- Pagination approach for result lists (saved searches)
+- Request/response content type (JSON assumed, but not formalized)
+
+---
+
+## 8. Risks and Technical Debt
+
+Business and platform risks are documented in [requirements.md](requirements.md) Section 10. This section tracks **architectural risks and known technical debt**.
+
+### 8.1 Architectural Risks
+
+| Risk | Severity | Mitigation |
+|---|---|---|
+| `SearchRequest` touched by 6 components — schema change has wide blast radius | Moderate | Treat as stable contract. Changes require cross-component review. (From §2.6) |
+| Google Hotels URL format is undocumented — may break without notice | Low | Worst case: user lands on a generic Google Hotels page. Monitor and adjust. (From ADR-006) |
+| Semantic Kernel dependency — if abandoned or API changes significantly, all AI-consuming modules affected | Low | Active maintenance and .NET ecosystem alignment reduce risk. Acceptable. (From ADR-004) |
+| 20-candidate cap may exclude valid matches from LLM ranking | Low | Cap chosen for latency budget. Revisit if users report missing relevant results. (From ADR-005) |
+| Nominatim usage policy (1 req/s) may bottleneck location resolution under load | Low | Single geocode per search. Only a concern at scale beyond MVP's 50 concurrent sessions. |
+
+### 8.2 Technical Debt
+
+| Item | Source | Impact | When to Address |
+|---|---|---|---|
+| No schema versioning for saved searches | §2.6 | If `SearchRequest` or `HotelResult` models evolve after users have saved searches, old snapshots may become unreadable | Before any model change after users have saved data |
+| Cross-cutting concepts (§7) are undecided | This document | Implementation will make ad hoc choices that may be inconsistent across modules | During early implementation — decide before the second module is built |
+| No monitoring or alerting strategy | §7.2 | Failures in production (API outages, AI errors) may go unnoticed | Before any non-local deployment |
+| User/Account/SavedSearch database models not yet defined | §4.1 | Deferred intentionally, but needed before implementing Identity & Accounts and Saved Searches modules | Phase 1 implementation |
+
+---
+
+## 9. Glossary
+
+| Term | Definition |
+|---|---|
+| Adapter | An implementation of `IPlatformAdapter` that integrates a specific accommodation platform API (e.g., Hotelbeds, Amadeus). |
+| CheckRate | A platform API call that verifies the current price and availability of a specific hotel offer before the user proceeds to booking. Required by Hotelbeds. |
+| Composition root | The ASP.NET Core host project that references all modules and wires adapter implementations to interfaces via dependency injection. |
+| Confirmation card | A structured summary of extracted search requirements presented to the user by the intake agent. The search only proceeds after the user explicitly confirms it. |
+| Contracts project | The shared .NET project that owns domain types (`SearchRequest`, `HotelResult`) and interface definitions (`IPlatformAdapter`, etc.). All modules depend inward on Contracts. (ADR-008) |
+| Hard-constraint filter | A deterministic code-based filter applied before AI ranking — currently budget and star rating. Removes candidates that objectively fail. (Section 4.3, Step 2) |
+| HotelResult | The common domain model for a hotel with its offers, produced by platform adapters, enriched by Result Processing, and consumed by the frontend. (MODELS.md) |
+| Intake agent | The AI-driven conversational component that owns the pre-search dialogue, extracts requirements, and produces a confirmed `SearchRequest`. (Section 2.2) |
+| Location constraint | A free-text string in `SearchRequest` describing a spatial preference ("near the lake", "walking distance to old town"). Evaluated via POI enrichment + LLM ranking, not parsed into structured filters. |
+| Location Resolution | Lightweight service that resolves free-text destination strings to geocoded coordinates via Nominatim. No domain model, no state, no data ownership. (Section 2.2) |
+| Modular monolith | The architectural style: domain-partitioned modules with compiler-enforced boundaries, deployed as a single container. (ADR-001) |
+| Nominatim | OpenStreetMap's geocoding service, used by Location Resolution to convert destination strings into coordinates and bounding boxes. |
+| Offer | A specific room/rate combination within a `HotelResult`. A single hotel may have multiple offers with different room configurations and prices. |
+| Overpass API | OpenStreetMap's query API, used for POI enrichment — finding nearby points of interest (train stations, supermarkets, etc.) given hotel coordinates. |
+| Platform | An external accommodation API that provides hotel availability and content data (Hotelbeds, Amadeus). |
+| Platform Search | The component that owns all platform-specific API integration logic. Contains one adapter per platform. (Section 2.2) |
+| POI enrichment | The step that queries Overpass API for nearby points of interest around each candidate hotel, converting vague location constraints into concrete distance data for AI ranking. (Section 4.3, Step 3) |
+| Presentation | The component that owns all user-facing UI rendering — chat interface, search results, property details, saved searches. Blazor WebAssembly SPA. (Section 2.2) |
+| Result Processing | The component that owns the pipeline transforming raw platform results into ranked, enriched results — hard-constraint filtering, POI enrichment, and AI ranking. (Section 2.2) |
+| Search Orchestration | The component that coordinates the end-to-end search workflow across Location Resolution, Platform Search, Result Processing, and Presentation. (Section 2.2) |
+| SearchRequest | The structured output of the intake agent: destination, dates, rooms, budget, preferences. The input contract for the search pipeline. (MODELS.md) |
+| Semantic Kernel | Microsoft's .NET SDK for AI orchestration, used as the abstraction layer between business logic and AI providers. (ADR-004) |
