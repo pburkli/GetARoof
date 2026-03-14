@@ -479,6 +479,7 @@ A single button on the hotel detail view: **"Book on Google Hotels →"**, opens
 | 005 | Hybrid ranking strategy | Accepted | Performance, Maintainability, Reliability |
 | 006 | Google Hotels deep link for external booking | Accepted | Non-goal (no in-app booking), cost constraint |
 | 007 | Free-text preferences over structured enums | Accepted | Maintainability, Interoperability |
+| 008 | Inward dependency rule for project references | Accepted | Maintainability, Interoperability |
 
 ---
 
@@ -536,7 +537,7 @@ Single shared PostgreSQL database. Each module owns its tables and accesses only
 The system must support multiple accommodation platforms (Hotelbeds Phase 1, Amadeus Phase 2, more planned). Adding a platform must not require changes to orchestration, ranking, or UI.
 
 **Decision:**
-Define an `IPlatformAdapter` interface in the Platform Search module. Each platform implements it in a separate .NET project. Adapters are registered via DI. Search Orchestration calls all registered adapters — it does not know which platforms exist.
+Define an `IPlatformAdapter` interface in the shared Contracts project (see ADR-008). Each platform implements it in a separate .NET project. Adapters are registered via DI. Search Orchestration calls all registered adapters — it does not know which platforms exist.
 
 **Alternatives Considered:**
 - **Direct integration without interface** — Faster initially but every new platform requires changes to orchestration logic. Violates the top-priority maintainability characteristic.
@@ -636,6 +637,38 @@ Store preferences as `string[]` in `SearchRequest`. No enum mapping at the model
 - (−) Preferences cannot be used for deterministic pre-filtering. A preference like "breakfast included" could have been a cheap code filter but is instead evaluated by the LLM.
 
 **Drivers:** Maintainability/Extensibility (no enum maintenance), Interoperability (no cross-platform taxonomy).
+
+---
+
+### ADR-008: Inward Dependency Rule for Project References
+
+**Status:** Accepted | **Date:** 2026-03-14
+
+**Context:**
+The modular monolith (ADR-001) enforces module boundaries via .NET project references. Without a rule governing which projects may reference which, dependency direction will be decided ad hoc during implementation. This risks infrastructure types leaking into domain logic — making it harder to swap adapters (Phase 2), test business logic in isolation, and reason about the system.
+
+**Decision:**
+One compile-enforced rule: **domain types and orchestration logic must not reference infrastructure.** Concretely:
+
+- A shared **Contracts** project owns domain types (`SearchRequest`, `HotelResult`) and interface definitions (`IPlatformAdapter`, `ILocationResolver`, `IRankingService`, etc.).
+- Orchestration and business logic projects reference Contracts, never adapter implementations.
+- Adapter projects (Hotelbeds, Amadeus, Nominatim, etc.) reference Contracts and implement the interfaces defined there.
+- The **composition root** (the ASP.NET Core host) references everything and wires adapters to interfaces via dependency injection.
+
+This is not full hexagonal/onion architecture. There are no mandated concentric layers within modules, no required repository pattern for simple persistence (e.g., Saved Searches), and no abstraction for its own sake. The rule applies at the project reference level only.
+
+**Alternatives Considered:**
+- **No dependency rule** — Rely on developer discipline. Faster initially, but in a solo project there is no code review to catch violations. Wrong dependencies become visible only when Phase 2 forces a change.
+- **Full hexagonal/onion architecture** — Mandates concentric layers (domain model, domain services, application services, infrastructure) within each module. Provides stronger structural guarantees but adds significant ceremony for modules that are internally simple. Over-engineered for a solo developer with 7 modules.
+
+**Consequences:**
+- (+) Compile-time enforcement: if an orchestration project references an adapter project, it won't build. No discipline required — the compiler catches it.
+- (+) Adapters are swappable without touching orchestration. Validated by scenarios S1, S2, S3.
+- (+) Orchestration and business logic are unit-testable by mocking interfaces from Contracts.
+- (−) Interface definitions must live in Contracts, not in the module that implements them. This moves `IPlatformAdapter` out of Platform Search (updating ADR-003).
+- (−) Adding a new external dependency requires defining an interface in Contracts first, then implementing it — slightly more upfront work than calling the dependency directly.
+
+**Drivers:** Maintainability/Extensibility (critical), Interoperability (critical), solo developer constraint.
 
 ---
 
